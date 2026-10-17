@@ -1,0 +1,24 @@
+[project]
+name = "laya-playground"
+version = "0.1.0"
+description = "Playground per Laya: scelta della soluzione dato un problema (CPU/GPU, tournament, stabilita')"
+requires-python = ">=3.10"
+dependencies = [
+    "laya[serve]>=0.4.9",
+    "torch>=2.14",
+]
+
+[tool.uv]
+# Il progetto non e' un pacchetto installabile: `uv sync` gestisce solo le dipendenze.
+package = false
+
+# PyTorch CUDA: in un progetto uv il backend si dichiara con un indice esplicito, non con
+# `--torch-backend` (che vale solo per `uv pip`). cu130 e' l'ultimo canale pubblicato con
+# torch 2.14.1 per Windows/cp312 ed e' compatibile con il driver CUDA 13.4 di questa macchina.
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }

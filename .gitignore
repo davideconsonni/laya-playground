@@ -1,0 +1,13 @@
+# ambiente
+.venv/
+
+# pesi dei checkpoint (grossi, ricreabili con src/warmup.py)
+.hf-cache/
+
+# segreti
+.env
+
+# python
+__pycache__/
+*.py[cod]
+/.idea/

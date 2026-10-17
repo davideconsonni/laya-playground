@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Laya playground - scelta della soluzione</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c2230;
+    --line: #2a3240;
+    --text: #e6edf3;
+    --muted: #8b98ab;
+    --accent: #4c9aff;
+    --accent-2: #2ea043;
+    --warn: #d29922;
+    --bad: #f85149;
+    --gpu: #7c6cff;
+    --cpu: #2ea043;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif;
+  }
+  header {
+    padding: 14px 20px; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    position: sticky; top: 0; background: var(--bg); z-index: 10;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  .pills { display: flex; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+  .pill {
+    font-size: 12px; padding: 3px 9px; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    white-space: nowrap;
+  }
+  .pill b { color: var(--text); font-weight: 600; }
+  .pill.ok { border-color: #1f4d2b; color: var(--accent-2); }
+  .pill.off { border-color: #5a2226; color: var(--bad); }
+
+  .layout { display: grid; grid-template-columns: minmax(380px, 480px) 1fr; gap: 18px; padding: 18px; align-items: start; }
+  @media (max-width: 980px) { .layout { grid-template-columns: 1fr; } }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; }
+
+  label.field { display: block; margin-bottom: 12px; }
+  label.field > span { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  textarea, input[type=number], input[type=text], select {
+    width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px;
+    font: inherit; resize: vertical;
+  }
+  textarea { min-height: 90px; font-family: inherit; }
+  textarea.mono { font-family: "Cascadia Mono", Consolas, monospace; font-size: 13px; }
+  textarea:focus, input:focus, select:focus { outline: none; border-color: var(--accent); }
+
+  .seg { display: flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    flex: 1; background: var(--bg); color: var(--muted); border: 0; padding: 8px 6px;
+    font: inherit; cursor: pointer; border-right: 1px solid var(--line);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button.active { background: var(--panel-2); color: var(--text); font-weight: 600; }
+  .seg button.active[data-value="cuda"] { color: var(--gpu); }
+  .seg button.active[data-value="cpu"] { color: var(--cpu); }
+
+  .row { display: flex; gap: 10px; }
+  .row > * { flex: 1; }
+  .check { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text); margin-bottom: 8px; }
+  .check input { width: auto; }
+
+  .actions { display: flex; gap: 10px; margin-top: 6px; flex-wrap: wrap; }
+  button.primary, button.ghost {
+    font: inherit; font-weight: 600; padding: 9px 14px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+  }
+  button.primary { background: var(--accent); color: #06101f; flex: 2 1 140px; }
+  button.primary:disabled { opacity: .5; cursor: progress; }
+  button.ghost { background: transparent; color: var(--text); border-color: var(--line); flex: 1 1 110px; }
+  button.ghost:hover { border-color: var(--accent); color: var(--accent); }
+
+  details.adv { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+  details.adv summary { cursor: pointer; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .06em; }
+
+  .hint { font-size: 12px; color: var(--muted); }
+  .notice { font-size: 12px; padding: 8px 10px; border-radius: 7px; margin-bottom: 10px; border: 1px solid; }
+  .notice.warn { border-color: #5a4a1a; color: var(--warn); background: #1d1a10; }
+  .notice.err { border-color: #5a2226; color: var(--bad); background: #1d1012; }
+  .empty { color: var(--muted); text-align: center; padding: 40px 10px; }
+
+  .cards { display: grid; gap: 14px; }
+  .cards.two { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 760px) { .cards.two { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .card > header {
+    position: static; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  }
+  .card .body { padding: 14px; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+  .badge.gpu { color: var(--gpu); border-color: #3c3570; }
+  .badge.cpu { color: var(--cpu); border-color: #1f4d2b; }
+  .badge.win { color: #06101f; background: var(--accent); border-color: var(--accent); font-weight: 700; }
+  .badge.low { color: var(--warn); border-color: #5a4a1a; }
+  .meta { display: flex; gap: 14px; flex-wrap: wrap; color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+  .meta b { color: var(--text); font-weight: 600; }
+
+  .rank { display: grid; gap: 9px; }
+  .opt { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: baseline; }
+  .opt .txt { font-size: 13px; }
+  .opt .key { color: var(--muted); font-family: Consolas, monospace; font-size: 11px; margin-right: 6px; }
+  .opt .pct { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12px; }
+  .opt.winner .txt { font-weight: 600; }
+  .opt.winner .pct { color: var(--accent); font-weight: 700; }
+  .bar { grid-column: 1 / -1; height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .bar > i { display: block; height: 100%; background: linear-gradient(90deg, #2f6fd0, var(--accent)); }
+  .opt.winner .bar > i { background: linear-gradient(90deg, #2ea043, #56d364); }
+  .eliminated { margin-top: 10px; font-size: 12px; color: var(--muted); }
+
+  .extras { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+  .extras b { color: var(--text); }
+  pre.json { background: var(--bg); border: 1px solid var(--line); border-radius: 7px; padding: 10px; overflow: auto; max-height: 320px; font-size: 11px; }
+
+  table.rot { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  table.rot th, table.rot td { border-bottom: 1px solid var(--line); padding: 5px 6px; text-align: left; }
+  table.rot th { color: var(--muted); font-weight: 500; }
+  .verdict { font-weight: 700; }
+  .verdict.stabile, .verdict.abbastanza { color: var(--accent-2); }
+  .verdict.instabile, .verdict.molto { color: var(--warn); }
+  .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: sp .7s linear infinite; vertical-align: -1px; margin-right: 6px; }
+  @keyframes sp { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Laya playground &mdash; scelta della soluzione</h1>
+    <div class="sub">Incolla il problema e la lista delle soluzioni. Il modello sceglie, con probabilita' calibrate, in un solo forward pass.</div>
+  </div>
+  <div class="pills" id="pills"><span class="pill">carico stato&hellip;</span></div>
+</header>
+
+<div class="layout">
+  <!-- ------------------------------------------------ SINISTRA -->
+  <div class="panel">
+    <h2>Input</h2>
+
+    <div id="warmbox" class="notice" style="display:none"></div>
+
+    <label class="field">
+      <span>Problema</span>
+      <textarea id="problem" placeholder="Incolla qui la descrizione del problema..."></textarea>
+    </label>
+
+    <label class="field">
+      <span>Soluzioni candidate &mdash; una per riga <b id="count" style="color:var(--muted)">(0)</b></span>
+      <textarea id="solutions" class="mono" style="min-height:150px" placeholder="Prima soluzione&#10;Seconda soluzione&#10;Terza soluzione"></textarea>
+    </label>
+
+    <label class="field">
+      <span>Device</span>
+      <div class="seg" id="device">
+        <button data-value="cuda" class="active">GPU (cuda)</button>
+        <button data-value="cpu">CPU</button>
+        <button data-value="both">Confronta GPU / CPU</button>
+      </div>
+    </label>
+
+    <label class="field">
+      <span>Strategia</span>
+      <div class="seg" id="strategy">
+        <button data-value="auto" class="active">Auto</button>
+        <button data-value="simple">Semplice</button>
+        <button data-value="tournament">Tournament</button>
+        <button data-value="long">Lungo</button>
+      </div>
+    </label>
+
+    <div class="row">
+      <label class="field">
+        <span>Checkpoint</span>
+        <select id="checkpoint">
+          <option value="multilingual" selected>Multilingual (100+ lingue)</option>
+          <option value="auto">Auto (dal testo)</option>
+          <option value="english">English</option>
+          <option value="typed-decisions">Typed-decisions</option>
+        </select>
+        <span class="hint">Auto puo' mandare un testo italiano breve e senza accenti al checkpoint inglese (che fuori dall'inglese crolla restando sicuro di sé). Per l'italiano tieni Multilingual.</span>
+      </label>
+      <label class="field" id="group-wrap" style="display:none">
+        <span>group_size</span>
+        <input type="number" id="group_size" value="16" min="2" max="64" />
+      </label>
+    </div>
+
+    <label class="check"><input type="checkbox" id="stability" /> Testa anche la <b>stabilita'</b> (k rotazioni dell'ordine)</label>
+    <label class="field" id="rot-wrap" style="display:none">
+      <span>Numero di rotazioni (max 8)</span>
+      <input type="number" id="rotations" value="4" min="1" max="8" />
+    </label>
+
+    <div class="actions">
+      <button class="primary" id="go">Decidi</button>
+      <button class="ghost" id="warm">Carica modello</button>
+      <button class="ghost" id="clear">Pulisci</button>
+    </div>
+    <div class="hint" style="margin-top:8px">Ctrl+Enter per eseguire. Il primo caricamento scarica i pesi dal Hub: puo' durare qualche minuto.<br>
+      <b>Quello che scrivi resta nel browser</b> (localStorage): ricaricare la pagina non perde problema, soluzioni ne' impostazioni. <i>Pulisci</i> cancella tutto.</div>
+
+    <details class="adv">
+      <summary>Avanzate</summary>
+
+      <label class="check" style="margin-top:10px"><input type="checkbox" id="auto_budget" checked /> Budget di token automatici</label>
+      <div class="row">
+        <label class="field">
+          <span>head_max_len (budget opzioni)</span>
+          <input type="number" id="head_max_len" min="16" max="4096" disabled />
+        </label>
+        <label class="field">
+          <span>max_len (contesto)</span>
+          <input type="number" id="max_len" min="64" max="8192" disabled />
+        </label>
+      </div>
+
+      <label class="field">
+        <span>min_confidence (astensione, vuoto = off)</span>
+        <input type="number" id="min_confidence" min="0" max="1" step="0.05" placeholder="es. 0.6" />
+      </label>
+
+      <label class="field">
+        <span>Lingua forzata (vuoto = rilevata)</span>
+        <input type="text" id="lang" placeholder="es. it, en, de" />
+      </label>
+
+      <label class="field">
+        <span>Istruzioni della domanda <i>(il modello non e' un LLM: non spiega, sceglie)</i></span>
+        <textarea id="instructions" class="mono"></textarea>
+      </label>
+
+      <label class="check"><input type="checkbox" id="with_quality" /> Aggiungi domanda <b>score</b>: quanto e' buona la migliore soluzione?</label>
+      <label class="check"><input type="checkbox" id="with_complete" /> Aggiungi domanda <b>noul</b>: esiste una soluzione che risolve del tutto?</label>
+
+      <label class="field" style="margin-top:10px">
+        <span>Chiave API <i>(solo se il server gira con <code>LAYA_API_KEY</code>)</i></span>
+        <input type="text" id="apikey" placeholder="incollala qui, resta in localStorage" />
+        <span class="hint" id="apikey_hint">si puo' anche passare una volta sola come <code>?key=...</code> nell'URL</span>
+      </label>
+    </details>
+  </div>
+
+  <!-- ------------------------------------------------ DESTRA -->
+  <div>
+    <div id="result" class="empty">Nessun risultato. Incolla problema e soluzioni, poi premi <b>Decidi</b>.</div>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const state = { device: 'cuda', strategy: 'auto', status: null, busy: false };
+
+// --- chiave API (solo se il server è pubblicato con LAYA_API_KEY) ---------------------
+// Si prende da ?key=... la prima volta, poi resta in localStorage. Senza chiave sul server
+// non cambia nulla.
+const API_KEY = (() => {
+  const url = new URL(location.href);
+  const fromUrl = url.searchParams.get('key');
+  if (fromUrl) {
+    localStorage.setItem('layaKey', fromUrl);
+    url.searchParams.delete('key');
+    history.replaceState(null, '', url.toString());
+    return fromUrl;
+  }
+  return localStorage.getItem('layaKey') || '';
+})();
+
+function apiFetch(path, opts = {}) {
+  opts.headers = Object.assign({}, opts.headers, API_KEY ? { 'x-api-key': API_KEY } : {});
+  return fetch(path, opts);
+}
+
+const INSTRUCTIONS_EN = "Which candidate solution best solves the problem described in the state? Pick the single most effective and practically applicable one.";
+const INSTRUCTIONS_IT = "Quale soluzione candidata risolve meglio il problema descritto? Scegli quella piu' efficace e applicabile in pratica.";
+
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+function pct(p) { return (p * 100).toFixed(2) + '%'; }
+
+// ---- segmented controls -------------------------------------------------------------
+// `setSeg` e' condiviso fra il click dell'utente e il ripristino dal localStorage.
+function setSeg(id, value) {
+  const root = $(id);
+  if (!value || ![...root.children].some((b) => b.dataset.value === value)) return false;
+  state[id === 'device' ? 'device' : 'strategy'] = value;
+  [...root.children].forEach((b) => b.classList.toggle('active', b.dataset.value === value));
+  return true;
+}
+
+function wireSeg(id, onchange) {
+  const root = $(id);
+  root.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    setSeg(id, btn.dataset.value);
+    scheduleSave();
+    if (onchange) onchange(btn.dataset.value);
+  });
+}
+wireSeg('device');
+wireSeg('strategy', (v) => {
+  $('group-wrap').style.display = v === 'tournament' ? '' : 'none';
+});
+
+// ---- stato ambiente -----------------------------------------------------------------
+async function refreshStatus() {
+  try {
+    const r = await apiFetch('/api/status');
+    const data = await r.json();
+    if (r.status === 401) {
+      $('pills').innerHTML = '<span class="pill off">serve la chiave API &mdash; incollala in Avanzate</span>';
+      return null;
+    }
+    if (!r.ok || !data.torch) {
+      $('pills').innerHTML = `<span class="pill off">/api/status: ${esc(data.detail || ('HTTP ' + r.status))}</span>`;
+      return null;
+    }
+    state.status = data;
+    renderPills();
+    renderWarmup();
+    return data;
+  } catch (e) {
+    $('pills').innerHTML = '<span class="pill off">server non raggiungibile</span>';
+    return null;
+  }
+}
+
+function renderPills() {
+  const s = state.status; if (!s) return;
+  const t = s.torch || {};
+  const gpu = t.cuda_available
+    ? `<span class="pill ok">GPU <b>${esc(t.gpu_name)}</b> ${t.vram_free_mb}/${t.vram_total_mb} MB</span>`
+    : `<span class="pill off">CUDA non disponibile &mdash; solo CPU</span>`;
+  const loaded = Object.entries(s.loaded || {}).map(([d, m]) => `${d}:${(m || []).length}`).join(' ');
+  $('pills').innerHTML =
+    `<span class="pill">laya <b>${esc(s.laya)}</b></span>` +
+    `<span class="pill">torch <b>${esc(t.torch)}</b></span>` +
+    gpu +
+    `<span class="pill ${s.token_present ? 'ok' : ''}">token HF <b>${s.token_present ? 'sì' : 'no'}</b></span>` +
+    (s.threads ? `<span class="pill">thread <b>${s.threads}</b></span>` : '') +
+    (s.auth_required ? '<span class="pill ok">chiave API attiva</span>' : '') +
+    (loaded ? `<span class="pill">in memoria <b>${esc(loaded)}</b></span>` : '');
+}
+
+function renderWarmup() {
+  const s = state.status; const box = $('warmbox');
+  const warm = (s && s.warmup) || {};
+  const active = Object.entries(warm).filter(([, v]) => v.state === 'loading');
+  if (active.length) {
+    box.style.display = '';
+    box.className = 'notice warn';
+    box.innerHTML = `<span class="spin"></span>caricamento in corso su <b>${active.map(([d]) => esc(d)).join(', ')}</b> &mdash; e' il download dei pesi, anche qualche minuto.`;
+  } else {
+    const errs = Object.entries(warm).filter(([, v]) => v.state === 'error');
+    if (errs.length) {
+      box.style.display = '';
+      box.className = 'notice err';
+      box.innerHTML = errs.map(([d, v]) => `<b>${esc(d)}</b>: ${esc(v.detail)}`).join('<br>');
+    } else {
+      box.style.display = 'none';
+    }
+  }
+}
+
+// ---- input helpers -------------------------------------------------------------------
+function readSolutions() {
+  return $('solutions').value.split('\n').map((s) => s.trim()).filter(Boolean);
+}
+function suggestBudgets(n) {
+  const head = Math.min(4096, Math.max(192, 16 + 24 * Math.max(1, n)));
+  return { head_max_len: head, max_len: Math.min(8192, Math.max(1024, head + 512)) };
+}
+function refreshCounter() {
+  const n = readSolutions().length;
+  const b = suggestBudgets(n);
+  $('count').textContent = `(${n})`;
+  if ($('auto_budget').checked) {
+    $('head_max_len').value = b.head_max_len;
+    $('max_len').value = b.max_len;
+  }
+}
+$('solutions').addEventListener('input', refreshCounter);
+$('auto_budget').addEventListener('change', (e) => {
+  $('head_max_len').disabled = e.target.checked;
+  $('max_len').disabled = e.target.checked;
+  refreshCounter();
+});
+$('stability').addEventListener('change', (e) => {
+  $('rot-wrap').style.display = e.target.checked ? '' : 'none';
+});
+[...document.querySelectorAll('textarea')].forEach((t) => {
+  t.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') run(); });
+});
+
+function payload() {
+  const solutions = readSolutions();
+  if (!solutions.length) throw new Error('incolla almeno una soluzione (una per riga)');
+  if (!$('problem').value.trim()) throw new Error('incolla il problema');
+  const num = (id) => { const v = $(id).value.trim(); return v === '' ? null : Number(v); };
+  return {
+    problem: $('problem').value,
+    solutions,
+    device: state.device,
+    checkpoint: $('checkpoint').value,
+    strategy: state.strategy,
+    group_size: Number($('group_size').value) || 16,
+    max_len: num('max_len'),
+    head_max_len: num('head_max_len'),
+    min_confidence: num('min_confidence'),
+    instructions: $('instructions').value.trim() || null,
+    with_quality: $('with_quality').checked,
+    with_complete: $('with_complete').checked,
+    lang: $('lang').value.trim() || null,
+  };
+}
+
+// ---- persistenza in localStorage ------------------------------------------------------
+// Tutto l'input sopravvive a un reload: incollare un problema lungo e perdere il lavoro
+// perche' hai ricaricato la pagina e' il modo piu' rapido per odiare un playground.
+const STORE_KEY = 'layaPlayground.v1';
+const RESULT_KEY = 'layaPlayground.lastResult.v1';
+const TEXT_IDS = ['problem', 'solutions', 'group_size', 'rotations', 'max_len', 'head_max_len',
+                  'min_confidence', 'lang', 'instructions'];
+const CHECK_IDS = ['stability', 'auto_budget', 'with_quality', 'with_complete'];
+
+function readStore(key) {
+  try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
+}
+function writeStore(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); return true; }
+  catch (e) { return false; }   // quota piena o storage disabilitato: non e' fatale
+}
+
+function snapshot() {
+  const fields = {}, checks = {};
+  TEXT_IDS.forEach((id) => { if ($(id)) fields[id] = $(id).value; });
+  CHECK_IDS.forEach((id) => { if ($(id)) checks[id] = $(id).checked; });
+  return { v: 1, device: state.device, strategy: state.strategy, fields, checks };
+}
+
+// I controlli che si mostrano/nascondono in base alle scelte: dopo un ripristino la UI deve
+// tornare coerente, non solo i valori.
+function syncVisibility() {
+  $('group-wrap').style.display = state.strategy === 'tournament' ? '' : 'none';
+  $('rot-wrap').style.display = $('stability').checked ? '' : 'none';
+  $('head_max_len').disabled = $('auto_budget').checked;
+  $('max_len').disabled = $('auto_budget').checked;
+}
+
+let saveTimer = null;
+function scheduleSave() {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => writeStore(STORE_KEY, snapshot()), 250);
+}
+
+function restore() {
+  const saved = readStore(STORE_KEY);
+  if (!saved || saved.v !== 1) return false;
+  Object.entries(saved.fields || {}).forEach(([id, value]) => { if ($(id)) $(id).value = value; });
+  Object.entries(saved.checks || {}).forEach(([id, value]) => { if ($(id)) $(id).checked = !!value; });
+  if (saved.device) setSeg('device', saved.device);
+  if (saved.strategy) setSeg('strategy', saved.strategy);
+  syncVisibility();
+  return true;
+}
+
+function saveResult(solve, stability) {
+  writeStore(RESULT_KEY, { v: 1, at: Date.now(), solve, stability: stability || null });
+}
+
+function restoreResult() {
+  const last = readStore(RESULT_KEY);
+  if (!last || last.v !== 1 || !last.solve) return false;
+  const when = new Date(last.at).toLocaleString();
+  const out = $('result');
+  out.className = '';
+  out.innerHTML =
+    `<div class="notice warn">Risultato della sessione precedente (${esc(when)}): premi <b>Decidi</b> per rieseguirlo sullo stato attuale.</div>`
+    + renderSolve(last.solve) + (last.stability ? renderStability(last.stability) : '');
+  return true;
+}
+
+function clearAll() {
+  try { localStorage.removeItem(STORE_KEY); localStorage.removeItem(RESULT_KEY); } catch (e) { /* niente */ }
+  TEXT_IDS.forEach((id) => { if ($(id)) $(id).value = ''; });
+  CHECK_IDS.forEach((id) => { if ($(id)) $(id).checked = false; });
+  $('auto_budget').checked = true;
+  $('rotations').value = 4;
+  $('group_size').value = 16;
+  $('instructions').value = INSTRUCTIONS_EN;
+  const cuda = !!(state.status && state.status.torch && state.status.torch.cuda_available);
+  setSeg('device', cuda ? 'cuda' : 'cpu');
+  setSeg('strategy', 'auto');
+  syncVisibility();
+  refreshCounter();
+  const out = $('result');
+  out.className = 'empty';
+  out.innerHTML = 'Nessun risultato. Incolla problema e soluzioni, poi premi <b>Decidi</b>.';
+}
+
+// Ogni modifica del form salva; i pulsanti segmentati lo fanno da soli (setSeg).
+document.querySelector('.panel').addEventListener('input', scheduleSave);
+document.querySelector('.panel').addEventListener('change', scheduleSave);
+$('clear').addEventListener('click', clearAll);
+// Un ultimo salvataggio prima di uscire: il debounce di 250 ms altrimenti puo' perdere
+// gli ultimi caratteri digitati se ricarichi subito.
+window.addEventListener('beforeunload', () => {
+  clearTimeout(saveTimer);
+  writeStore(STORE_KEY, snapshot());
+});
+
+// ---- rendering -----------------------------------------------------------------------
+function optionRows(ranked, winnerKey) {
+  if (!ranked.length) return '<div class="hint">nessuna probabilita\' riportata</div>';
+  return `<div class="rank">` + ranked.map((o) => `
+    <div class="opt ${o.key === winnerKey ? 'winner' : ''}">
+      <div class="txt"><span class="key">${esc(o.key)}</span>${esc(o.text)}
+        ${o.key === winnerKey ? '<span class="badge win" style="margin-left:6px">scelta</span>' : ''}</div>
+      <div class="pct">${pct(o.prob)}</div>
+      <div class="bar"><i style="width:${Math.max(1, o.prob * 100).toFixed(2)}%"></i></div>
+    </div>`).join('') + `</div>`;
+}
+
+function gateBadges(r) {
+  let html = '';
+  if (r.low_confidence) html += `<span class="badge low">low confidence</span>`;
+  if (r.abstention) html += `<span class="badge ${r.abstention === 'abstained' ? 'low' : ''}">gate: ${esc(r.abstention)}${r.abstention_threshold != null ? ' @ ' + r.abstention_threshold : ''}</span>`;
+  return html;
+}
+
+function renderSolve(data) {
+  const errs = Object.entries(data.errors || {});
+  let html = '';
+  if (errs.length) {
+    html += errs.map(([d, m]) => `<div class="notice err"><b>${esc(d)}</b>: ${esc(m)}</div>`).join('');
+  }
+  html += `<div class="cards ${data.results.length > 1 ? 'two' : ''}">`;
+  for (const r of data.results) {
+    const devClass = r.device === 'cuda' ? 'gpu' : 'cpu';
+    html += `<div class="card">
+      <header>
+        <span class="badge ${devClass}">${esc(r.device)}</span>
+        <span class="badge">${esc(r.checkpoint || '?')}</span>
+        <span class="badge">${esc(r.strategy)}</span>
+        <span class="badge">${r.latency_ms} ms</span>
+        ${gateBadges(r)}
+      </header>
+      <div class="body">
+        <div class="meta">
+          <span>routing: <b>${esc(r.reason || '-')}</b></span>
+          <span>dtype: <b>${esc(r.dtype || 'n/d')}</b></span>
+          <span>budget: <b>${r.budgets.max_len}</b> / head <b>${r.budgets.head_max_len}</b></span>
+          <span>soluzioni: <b>${r.n_solutions}</b></span>
+          ${r.answer_confidence != null ? `<span>answer_conf: <b>${Number(r.answer_confidence).toFixed(3)}</b></span>` : ''}
+        </div>
+        ${optionRows(r.ranked, r.choice)}
+        ${r.eliminated && r.eliminated.length ? `<div class="eliminated">eliminate dal tournament (${r.eliminated.length}): ${r.eliminated.map((o) => esc(o.key)).join(', ')}</div>` : ''}
+        ${r.tournament ? `<div class="eliminated">tournament: ${r.tournament.rounds} round, ${r.tournament.finalists.length} finaliste (gruppi da ${r.tournament.group_size})</div>` : ''}
+        ${extraBlock(r)}
+        ${(r.notes || []).map((n) => `<div class="notice warn" style="margin-top:10px">${esc(n)}</div>`).join('')}
+        <details class="adv"><summary>JSON</summary><pre class="json">${esc(JSON.stringify(r, null, 2))}</pre></details>
+      </div>
+    </div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+function extraBlock(r) {
+  const q = r.extras && r.extras.quality;
+  const c = r.extras && r.extras.complete;
+  if (!q && !c) return '';
+  let html = '<div class="extras">';
+  if (q && q.top) html += `quanto e' buona la migliore soluzione (<b>score</b>): <b>${esc(q.top.text)}</b> (livello ${q.top.key}) &middot; conf ${q.answer_confidence != null ? Number(q.answer_confidence).toFixed(3) : 'n/d'}<br>`;
+  if (c) html += `esiste una soluzione che risolve del tutto (<b>noul</b>): <b>P(si) = ${Number(c.noul).toFixed(3)}</b>`;
+  html += '</div>';
+  return html;
+}
+
+function renderStability(s) {
+  const verdictClass = (s.verdict || '').split(' ')[0].replace(':', '');
+  let html = `<div class="card" style="margin-top:14px">
+    <header>
+      <span class="badge">stabilita'</span>
+      <span class="badge">${esc(s.checkpoint || '?')}</span>
+      <span class="badge">${s.rotations} rotazioni</span>
+      <span class="badge">${s.latency_ms} ms</span>
+    </header>
+    <div class="body">
+      <div class="meta"><span>verdetto: <span class="verdict ${esc(verdictClass)}">${esc(s.verdict)}</span>
+        &middot; accordo <b>${(s.agreement * 100).toFixed(0)}%</b> &middot; ${s.distinct_choices} scelte distinte su ${s.rotations}</span></div>
+      <h2 style="margin:10px 0 0">Probabilita' mediate sulle rotazioni</h2>
+      ${optionRows(s.mean_ranked, s.mediated)}
+      <h2 style="margin:14px 0 0">Cosa ha scelto ogni rotazione</h2>
+      <table class="rot">
+        <tr><th>rot</th><th>ordine presentato</th><th>scelta</th><th>conf</th></tr>
+        ${s.per_rotation.map((p) => `<tr>
+          <td>${p.rotation}</td>
+          <td style="font-family:Consolas,monospace">${p.order.map((i) => 's' + String(i).padStart(2, '0')).join(' &rarr; ')}</td>
+          <td>${esc(p.choice)} ${p.choice === s.mediated ? '' : '<span class="badge low">diversa</span>'}</td>
+          <td>${p.confidence != null ? Number(p.confidence).toFixed(2) : '-'}</td>
+        </tr>`).join('')}
+      </table>
+      <div class="hint" style="margin-top:10px">${esc(s.note)}</div>
+      <details class="adv"><summary>JSON</summary><pre class="json">${esc(JSON.stringify(s, null, 2))}</pre></details>
+    </div>
+  </div>`;
+  return html;
+}
+
+// ---- azioni --------------------------------------------------------------------------
+async function run() {
+  if (state.busy) return;
+  const out = $('result');
+  let body;
+  try { body = payload(); }
+  catch (e) { out.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
+
+  state.busy = true; $('go').disabled = true;
+  const wantStability = $('stability').checked;
+  const stratNote = (wantStability && body.strategy === 'tournament')
+    ? `<div class="notice warn">La stabilita' usa sempre la strategia semplice: il tournament rimuove <code>option_order</code>, che serve alle rotazioni.</div>` : '';
+  out.innerHTML = `${stratNote}<div class="notice warn"><span class="spin"></span>inferenza su <b>${esc(body.device)}</b>&hellip; il primo giro puo' richiedere minuti (download dei pesi).</div>`;
+
+  try {
+    const r = await apiFetch('/api/solve', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+    });
+    const data = await r.json();
+    if (r.status === 401) throw new Error('serve la chiave API: incollala in Avanzate');
+    if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    let html = renderSolve(data);
+    let stabData = null;
+    if (wantStability) {
+      const rot = Number($('rotations').value) || 4;
+      const stabBody = { ...body, strategy: 'simple', rotations: rot };
+      const rs = await apiFetch('/api/stability', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(stabBody),
+      });
+      const sd = await rs.json();
+      if (rs.ok) { stabData = sd; html += renderStability(sd); }
+      else { html += `<div class="notice err">stabilita' fallita: ${esc(sd.detail || rs.status)}</div>`; }
+    }
+    out.className = '';
+    out.innerHTML = html;
+    saveResult(data, stabData);
+    scheduleSave();
+    refreshStatus();
+  } catch (e) {
+    out.className = '';
+    out.innerHTML = `<div class="notice err">errore: ${esc(e.message)}</div>`;
+  } finally {
+    state.busy = false; $('go').disabled = false;
+  }
+}
+
+$('go').addEventListener('click', run);
+$('warm').addEventListener('click', async () => {
+  const dev = state.device === 'both' ? 'both' : state.device;
+  const cp = $('checkpoint').value;
+  await apiFetch('/api/warmup', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ device: dev, checkpoints: cp === 'auto' ? null : [cp] }),
+  });
+  refreshStatus();
+});
+
+function saveApiKey(value) {
+  const key = (value || '').trim();
+  if (key) localStorage.setItem('layaKey', key); else localStorage.removeItem('layaKey');
+  $('apikey_hint').textContent = key ? 'salvata: ricarica la pagina per usarla' : 'rimossa';
+}
+$('apikey').addEventListener('change', (e) => saveApiKey(e.target.value));
+
+// ---- avvio ---------------------------------------------------------------------------
+$('apikey').value = API_KEY;
+if (API_KEY) $('apikey_hint').textContent = 'chiave attiva in localStorage';
+
+// Il ripristino va prima di tutto il resto: poi il device di default si sceglie solo se non
+// c'era nulla di salvato (altrimenti un reload ti cambierebbe la scelta sotto le dita).
+const restored = restore();
+if (!restored) $('instructions').value = INSTRUCTIONS_EN;
+syncVisibility();
+refreshCounter();
+restoreResult();
+
+refreshStatus().then((s) => {
+  const cuda = !!(s && s.torch && s.torch.cuda_available);
+  if (!restored) {
+    setSeg('device', (s && s.defaults && s.defaults.device) || 'cuda');
+    if (!cuda) setSeg('device', 'cpu');
+  } else if (!cuda && state.device !== 'cpu') {
+    // il device salvato non esiste su questa macchina (o dentro il container senza GPU)
+    setSeg('device', 'cpu');
+  }
+});
+setInterval(refreshStatus, 4000);
+</script>
+</body>
+</html>

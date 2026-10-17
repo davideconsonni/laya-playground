@@ -1,0 +1,14 @@
+# Il contesto di build non deve includere l'ambiente locale ne' i pesi: sono GB.
+.venv/
+.hf-cache/
+__pycache__/
+*.pyc
+
+# Segreti: il token entra a runtime con `env_file`/`--env-file`, mai nell'immagine.
+.env
+
+# Roba da Windows e file che l'immagine non usa.
+run.ps1
+.python-version
+uv.lock
+*.md
