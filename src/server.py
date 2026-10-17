@@ -30,6 +30,29 @@ import engine
 
 log = logging.getLogger("laya-playground")
 
+
+class _QuietAccessFilter(logging.Filter):
+    """Drop access-log records for paths that are pure noise.
+
+    A browser keeps revalidating a service worker it registered for this origin from some *earlier*
+    app that ran on the same port. Serving `/service-worker.js` would really register one (stale-UI
+    risk), so the request is dropped from the log instead of answered.
+    """
+
+    def __init__(self, paths: List[str]) -> None:
+        super().__init__()
+        self._paths = tuple(paths)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        # uvicorn.access passes ``(client, method, path, http_version, status)`` as ``record.args``.
+        args = record.args
+        path = args[2] if isinstance(args, tuple) and len(args) >= 3 else record.getMessage()
+        return not any(p in str(path) for p in self._paths)
+
+
+# Access-log noise. Add paths here to silence more (e.g. "/favicon.ico").
+QUIET_ACCESS_PATHS = ["/service-worker.js"]
+
 app = FastAPI(title="Laya playground", version="0.1.0")
 
 
@@ -265,6 +288,8 @@ def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    # Keep the recurring service-worker 404 out of the access log (see _QuietAccessFilter).
+    logging.getLogger("uvicorn.access").addFilter(_QuietAccessFilter(QUIET_ACCESS_PATHS))
     log.info("UI: http://%s:%s   (default device: %s)", args.host, args.port, args.device)
     if api_key():
         log.info("LAYA_API_KEY is set: the /api/* routes require the key")

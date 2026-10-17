@@ -555,9 +555,15 @@ def _per_solution_questions(
 
 
 def _per_solution_view(
-    answers: Dict[str, Any], solutions: List[str]
+    answers: Dict[str, Any], solutions: List[str], min_confidence: Optional[float] = None
 ) -> Dict[str, Any]:
-    """Rank the candidates by P("A") from the per-solution answers, in the usual view shape."""
+    """Rank the candidates by P("A") from the per-solution answers, in the usual view shape.
+
+    The threshold applies to the *aggregated* decision: if even the best candidate's P(eliminates
+    the problem) is below `min_confidence`, the answer is reported as abstained. (Passing
+    `min_confidence` down to Laya would gate every two-option question on `max(p)`, which is the
+    probability of whichever of "yes"/"no" wins, not the probability that matters here.)
+    """
     ranked = []
     for i, text in enumerate(solutions):
         answer = answers.get(f"q{i:02d}") or {}
@@ -566,16 +572,26 @@ def _per_solution_view(
         ranked.append({"key": f"s{i:02d}", "text": text, "prob": p_yes})
     ranked.sort(key=lambda item: item["prob"], reverse=True)
     top = ranked[0] if ranked else None
+    top_prob = top["prob"] if top else None
+
+    abstention = None
+    abstention_threshold = None
+    if min_confidence is not None:
+        abstention_threshold = float(min_confidence)
+        abstained = top_prob is not None and top_prob < float(min_confidence)
+        # Same vocabulary as Laya's gate (`passed` / `abstained`), so the UI badge is identical.
+        abstention = "abstained" if abstained else "passed"
+
     return {
         "choice": top["key"] if top else None,
         "top": top,
         "ranked": ranked,
         "eliminated": [],
         "confidence": None,
-        "answer_confidence": top["prob"] if top else None,
+        "answer_confidence": top_prob,
         "low_confidence": None,
-        "abstention": None,
-        "abstention_threshold": None,
+        "abstention": abstention,
+        "abstention_threshold": abstention_threshold,
     }
 
 
@@ -642,7 +658,8 @@ def solve(
         "max_len": resolved_max_len,
         "head_max_len": resolved_head_max_len,
     }
-    if min_confidence is not None:
+    # `per_solution` applies the threshold to the aggregated ranking, not per two-option question.
+    if min_confidence is not None and strategy != "per_solution":
         budget_kwargs["min_confidence"] = float(min_confidence)
 
     started = time.perf_counter()
@@ -660,7 +677,7 @@ def solve(
 
     answers = result.get("answers") or {}
     if strategy == "per_solution":
-        view = _per_solution_view(answers, solutions)
+        view = _per_solution_view(answers, solutions, min_confidence=min_confidence)
     else:
         view = _answer_view(answers.get("best") or {}, criteria)
     routing = result.get("routing")

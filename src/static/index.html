@@ -369,6 +369,8 @@ function apiFetch(path, opts = {}) {
 }
 
 const INSTRUCTIONS_EN = "Which candidate solution best solves the problem described in the state?";
+// Default usato dalla strategia "per soluzione" quando il campo istruzioni e' vuoto (prefisso di ogni domanda).
+const PER_SOLUTION_INSTRUCTIONS_EN = "Does this candidate solution fully eliminate the problem described in the state?";
 const INSTRUCTIONS_LONG_EN = "Which candidate fully eliminates the problem under all stated constraints, including restarts, concurrency and late retries, and does not merely reduce its probability?";
 const INSTRUCTIONS_LEGACY_EN = "Which candidate solution best solves the problem described in the state? Pick the single most effective and practically applicable one.";
 // Fallback finche' /api/status non fornisce i preset di engine.py (stessa lista, stesso ordine).
@@ -939,8 +941,11 @@ function buildDump(sess) {
   add('');
   add('Istruzioni della domanda (modificabili dall\'utente):');
   add(FENCE);
-  add(req.instructions ? req.instructions : INSTRUCTIONS_EN + '   [default]');
+  add(req.instructions ? req.instructions : ((req.strategy === 'per_solution' ? PER_SOLUTION_INSTRUCTIONS_EN : INSTRUCTIONS_EN) + '   [default]'));
   add(FENCE);
+  if (req.strategy === 'per_solution') {
+    add('(in per_solution questo testo e\' il prefisso di ogni domanda: il modello riceve "<testo> Candidate: <soluzione>")');
+  }
   add('');
 
   // --- esito --------------------------------------------------------------------------

@@ -238,6 +238,10 @@ environment):
   the `errors` map.
 - **Unhandled exception** -> a global handler returns `{detail: "<Type>: <message>"}` as JSON.
 - **Exposed without a key** -> the server logs a clear warning at startup.
+- **Access-log noise** -> `_QuietAccessFilter` drops `QUIET_ACCESS_PATHS` (currently
+  `/service-worker.js`, a stale service worker the browser keeps revalidating) from
+  `uvicorn.access`. The path is **not** served: serving it would register a real worker and risk a
+  stale UI. Add more paths to `QUIET_ACCESS_PATHS` if needed.
 - **Base checkpoints are near chance on domain judgments** (Laya's own `typed-decisions`
   benchmark: 0.362 English / 0.342 multilingual zero-shot, against 0.318 random). The UI says so,
   the benchmark measures it on your own cases, and `per_solution` asks the short typed questions
