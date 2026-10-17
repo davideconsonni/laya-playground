@@ -20,6 +20,7 @@ the server at startup.
 from __future__ import annotations
 
 import os
+import random
 import sys
 import threading
 import time
@@ -63,13 +64,54 @@ os.environ.setdefault("HF_HUB_CACHE", str(HF_CACHE_DIR / "hub"))
 # English because that is the language with the most training data; the solution texts stay in
 # the user's language. They can be edited from the UI to run an A/B.
 INSTRUCTIONS_EN = (
+    "Which candidate fully eliminates the problem under all stated constraints, including "
+    "restarts, concurrency and late retries, and does not merely reduce its probability?"
+)
+INSTRUCTIONS_IT = (
+    "Quale soluzione candidata elimina del tutto il problema rispettando tutti i vincoli "
+    "indicati, compresi riavvii, concorrenza e ritentativi tardivi, invece di ridurne solo la "
+    "probabilita'?"
+)
+
+# The previous default, kept as a preset so the wording change can be measured instead of felt.
+INSTRUCTIONS_LEGACY_EN = (
     "Which candidate solution best solves the problem described in the state? "
     "Pick the single most effective and practically applicable one."
 )
-INSTRUCTIONS_IT = (
-    "Quale soluzione candidata risolve meglio il problema descritto? "
-    "Scegli quella piu' efficace e applicabile in pratica."
-)
+
+# Instruction variants the UI shows in its preset menu. Labels are Italian (what the user reads);
+# the instruction text stays English (the model's training language), editable in the textarea.
+INSTRUCTION_PRESETS = [
+    {"id": "eliminates", "label": "Elimina il problema (default)", "text": INSTRUCTIONS_EN},
+    {"id": "legacy", "label": "Versione precedente (efficace e applicabile)", "text": INSTRUCTIONS_LEGACY_EN},
+    {
+        "id": "correctness",
+        "label": "Correttezza forte",
+        "text": (
+            "Which candidate solution is most likely to be fully correct under every stated "
+            "constraint? Favour correctness over speed, cost or simplicity, and ignore how easy "
+            "each option is to implement."
+        ),
+    },
+    {
+        "id": "low_risk",
+        "label": "Minimo rischio",
+        "text": (
+            "Which candidate solution carries the lowest risk of making things worse or failing "
+            "under load, partial rollbacks and unexpected inputs? Prefer the option with the "
+            "smallest blast radius, even when its upside is smaller."
+        ),
+    },
+    {
+        "id": "fast",
+        "label": "Rapidita' di intervento",
+        "text": (
+            "Which candidate solution can be deployed and start helping the soonest, with the "
+            "least coordination and the fewest moving parts? Prefer the fastest effective "
+            "intervention over the most thorough one."
+        ),
+    },
+]
 
 QUALITY_INSTRUCTIONS = "How good is the best solution available for this problem?"
 QUALITY_LEVELS = ["useless", "weak", "workable", "good", "optimal"]
@@ -85,7 +127,19 @@ AUTO_TOURNAMENT_AT = 20
 # Tournament group size (the library default is 16).
 DEFAULT_GROUP_SIZE = 16
 # Beyond this number the stability mode costs more than it tells you.
-MAX_ROTATIONS = 8
+MAX_ROTATIONS = 32
+# Fixed seed for the stability rotations: random permutations, reproducible run to run.
+STABILITY_SEED = 0
+# Suggested abstention threshold shown in the UI when the user leaves `min_confidence` empty.
+# It is a nudge, not a calibrated value: the shipped checkpoints are over-confident.
+SUGGESTED_MIN_CONFIDENCE = 0.5
+
+# Thresholds of the composite reliability flag (see `reliability`). Heuristics, not calibration.
+RELIABILITY_AGREEMENT_OK = 0.75
+RELIABILITY_AGREEMENT_CAUTION = 0.5
+RELIABILITY_CONFIDENCE_LOW = 0.34
+RELIABILITY_GOOD_LEVELS = ("good", "optimal")
+RELIABILITY_WEAK_LEVELS = ("useless", "weak")
 
 STRATEGIES = ("auto", "simple", "tournament", "long")
 
@@ -554,6 +608,11 @@ def solve(
             notes.append(note)
     if strategy == "tournament" and n > int(group_size) * 4:
         notes.append("con piu' di 256 soluzioni il tournament non basta: riduci la lista")
+    if strategy == "tournament" and n <= int(group_size):
+        notes.append(
+            f"tournament inattivo (0 round): con {n} soluzioni e group_size {int(group_size)} "
+            "equivale alla strategia Semplice"
+        )
 
     return {
         "device": normalise_device(device),
@@ -592,6 +651,16 @@ def solve(
     }
 
 
+def _rotation_cap(n: int) -> int:
+    """Largest number of *distinct* permutations of n slots we would ever ask for."""
+    total = 1
+    for i in range(2, n + 1):
+        total *= i
+        if total >= MAX_ROTATIONS:
+            return MAX_ROTATIONS
+    return total
+
+
 def stability(
     *,
     problem: str,
@@ -599,6 +668,7 @@ def stability(
     device: Optional[str] = None,
     checkpoint: str = "auto",
     rotations: Optional[int] = None,
+    seed: Optional[int] = None,
     max_len: Optional[int] = None,
     head_max_len: Optional[int] = None,
     instructions: Optional[str] = None,
@@ -620,16 +690,27 @@ def stability(
         raise ValueError("servono almeno due soluzioni candidate")
 
     k = int(rotations) if rotations else min(n, 4)
-    k = max(1, min(k, n, MAX_ROTATIONS))
+    k = max(1, min(k, MAX_ROTATIONS, _rotation_cap(n)))
+    seed = STABILITY_SEED if seed is None else int(seed)
 
     base = build_questions(solutions, instructions=instructions)["best"]
     criteria = base["criteria"]
     keys = list(criteria)
 
+    # Random permutations, not just the cyclic shifts: a cyclic set only moves each option through
+    # a fixed sequence of slots. With k <= n distinct permutations always exist, so the retry
+    # finds a fresh one. `random.Random(seed)` keeps the rotation set reproducible.
+    rng = random.Random(seed)
     rotations_questions: Dict[str, Any] = {}
     orders: Dict[str, List[int]] = {}
+    seen: set = set()
     for r in range(k):
-        order = [(i + r) % n for i in range(n)]
+        order = list(range(n))
+        for _ in range(64):
+            rng.shuffle(order)
+            if tuple(order) not in seen:
+                break
+        seen.add(tuple(order))
         rotations_questions[f"r{r}"] = dict(base, option_order=order)
         orders[f"r{r}"] = order
 
@@ -686,24 +767,137 @@ def stability(
     else:
         verdict = "molto instabile: non fidarti di questa scelta"
 
+    distribution = sorted(
+        (
+            {"choice": choice, "count": count, "share": round(count / k, 3)}
+            for choice, count in votes.items()
+        ),
+        key=lambda item: item["count"],
+        reverse=True,
+    )
+
     return {
         "device": normalise_device(device),
         "checkpoint": (result.get("routing") or {}).get("model"),
         "routing": result.get("routing"),
         "budgets": {"max_len": resolved_max_len, "head_max_len": resolved_head_max_len},
         "rotations": k,
+        "seed": seed,
         "n_solutions": n,
         "latency_ms": round(latency_ms, 1),
         "per_rotation": per_rotation,
         "votes": votes,
+        "distribution": distribution,
         "mediated": mediated,
         "mean_ranked": mean_ranked,
         "agreement": round(agreement, 3),
         "distinct_choices": len(votes),
         "verdict": verdict,
         "note": (
+            "ogni rotazione e' una permutazione casuale degli slot (seed fisso, riproducibile): "
             "la probabilita' mediata e' la media delle probabilita' per opzione su tutte le "
-            "rotazioni: e' piu' stabile della singola risposta, non piu' calibrata"
+            "rotazioni ed e' piu' stabile della singola risposta, non piu' calibrata"
+        ),
+    }
+
+
+# --------------------------------------------------------------------------------------
+# Composite reliability flag
+# --------------------------------------------------------------------------------------
+
+
+def reliability(
+    solve_result: Dict[str, Any],
+    stability_result: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """One flag combining confidence, rotation agreement and score/noul coherence.
+
+    It is a **heuristic**: Laya exposes probabilities and a confidence, and this is a rule of
+    thumb over them, not a calibration and not a probability. The ``reasons`` list says which rule
+    fired, so the caller can disagree with it; read it together with the raw numbers.
+    """
+    order = {"ok": 0, "caution": 1, "unreliable": 2}
+    level = "ok"
+    reasons: List[str] = []
+
+    def bump(new: str) -> None:
+        nonlocal level
+        if order[new] > order[level]:
+            level = new
+
+    if solve_result.get("abstention") == "abstained":
+        bump("unreliable")
+        reasons.append("il gate di astensione ha rifiutato la scelta")
+    if solve_result.get("low_confidence"):
+        bump("caution")
+        reasons.append("low_confidence: il gate interno segnala confidenza bassa")
+
+    answer_confidence = solve_result.get("answer_confidence")
+    if (
+        isinstance(answer_confidence, (int, float))
+        and not isinstance(answer_confidence, bool)
+        and float(answer_confidence) < RELIABILITY_CONFIDENCE_LOW
+    ):
+        bump("caution")
+        reasons.append(f"answer_confidence bassa ({float(answer_confidence):.3f})")
+
+    agreement: Optional[float] = None
+    if stability_result:
+        raw = stability_result.get("agreement")
+        if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            agreement = float(raw)
+            if agreement < RELIABILITY_AGREEMENT_CAUTION:
+                bump("unreliable")
+                reasons.append(f"accordo tra rotazioni basso ({agreement:.0%})")
+            elif agreement < RELIABILITY_AGREEMENT_OK:
+                bump("caution")
+                reasons.append(f"accordo tra rotazioni medio ({agreement:.0%})")
+        distinct = stability_result.get("distinct_choices")
+        if isinstance(distinct, int) and not isinstance(distinct, bool) and distinct > 2:
+            bump("caution")
+            reasons.append(f"{distinct} scelte distinte tra le rotazioni")
+    else:
+        reasons.append("stabilita' non testata: giudizio basato su confidenza e coerenza")
+
+    extras = solve_result.get("extras") or {}
+    quality = extras.get("quality") or {}
+    q_level = (quality.get("top") or {}).get("key")
+    if q_level in RELIABILITY_GOOD_LEVELS:
+        if agreement is not None and agreement < RELIABILITY_AGREEMENT_OK:
+            bump("unreliable")
+            reasons.append(
+                f"score '{q_level}' ma la scelta non e' stabile: confidenza non affidabile"
+            )
+    elif q_level in RELIABILITY_WEAK_LEVELS:
+        bump("caution")
+        reasons.append(f"score '{q_level}': la migliore soluzione disponibile e' debole")
+
+    complete = extras.get("complete")
+    noul = complete.get("noul") if isinstance(complete, dict) else None
+    if (
+        isinstance(noul, (int, float))
+        and not isinstance(noul, bool)
+        and float(noul) < 0.5
+    ):
+        reasons.append(f"noul: nessuna soluzione risolve del tutto (P(si)={float(noul):.3f})")
+
+    labels = {"ok": "affidabile", "caution": "da verificare", "unreliable": "poco affidabile"}
+    return {
+        "level": level,
+        "label": labels[level],
+        "reasons": reasons,
+        "inputs": {
+            "answer_confidence": answer_confidence,
+            "low_confidence": solve_result.get("low_confidence"),
+            "abstention": solve_result.get("abstention"),
+            "agreement": agreement,
+            "stability_tested": bool(stability_result),
+            "score_level": q_level,
+            "noul": noul,
+        },
+        "note": (
+            "euristica su confidenza + accordo tra rotazioni + coerenza con score/noul: non e' "
+            "una probabilita' ne' una calibrazione"
         ),
     }
 
@@ -797,6 +991,8 @@ def status() -> Dict[str, Any]:
             "max_rotations": MAX_ROTATIONS,
             "instructions_en": INSTRUCTIONS_EN,
             "instructions_it": INSTRUCTIONS_IT,
+            "instruction_presets": INSTRUCTION_PRESETS,
+            "suggested_min_confidence": SUGGESTED_MIN_CONFIDENCE,
             "quality_levels": QUALITY_LEVELS,
         },
     }

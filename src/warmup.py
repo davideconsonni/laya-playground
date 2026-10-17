@@ -50,6 +50,35 @@ def _report(device: str, result: dict) -> None:
         print(f"  note           : {note}")
 
 
+def _determinism(device: str, checkpoint: str) -> int:
+    """Same input + same parameters must give the same output (the invariant to not break).
+
+    Laya exposes no seed and inference should be deterministic; the stability rotations are
+    random but seeded, so a second run must reproduce both the orders and the numbers.
+    """
+    failures = 0
+    a = engine.solve(problem=PROBLEM, solutions=SOLUTIONS, device=device, checkpoint=checkpoint)
+    b = engine.solve(problem=PROBLEM, solutions=SOLUTIONS, device=device, checkpoint=checkpoint)
+    dps = [abs(x["prob"] - y["prob"]) for x, y in zip(a["ranked"], b["ranked"])]
+    worst = max(dps) if dps else 0.0
+    ok = worst <= 1e-6 and a["choice"] == b["choice"]
+    print(f"  determinism solve: {'OK' if ok else 'FAIL'}  max|dp|={worst:.2e}  "
+          f"choice={a['choice']}/{b['choice']}")
+    failures += 0 if ok else 1
+
+    s1 = engine.stability(problem=PROBLEM, solutions=SOLUTIONS, device=device,
+                          checkpoint=checkpoint, rotations=4)
+    s2 = engine.stability(problem=PROBLEM, solutions=SOLUTIONS, device=device,
+                          checkpoint=checkpoint, rotations=4)
+    orders_same = [p["order"] for p in s1["per_rotation"]] == [p["order"] for p in s2["per_rotation"]]
+    ok2 = s1["mediated"] == s2["mediated"] and s1["agreement"] == s2["agreement"] and orders_same
+    print(f"  determinism stab : {'OK' if ok2 else 'FAIL'}  "
+          f"mediated={s1['mediated']}/{s2['mediated']}  "
+          f"agreement={s1['agreement']}/{s2['agreement']}  orders_same={orders_same}")
+    failures += 0 if ok2 else 1
+    return failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Warmup and smoke test for the Laya playground")
     parser.add_argument("--device", default="cuda", help="cuda | cpu | both | auto")
@@ -57,6 +86,8 @@ def main() -> int:
                         help="auto | english | multilingual | typed-decisions")
     parser.add_argument("--full", action="store_true",
                         help="also try the tournament (30 solutions) and stability")
+    parser.add_argument("--determinism", action="store_true",
+                        help="run the same input twice and check the output is identical")
     args = parser.parse_args()
 
     info = engine.status()
@@ -103,6 +134,13 @@ def main() -> int:
             print(f"  ERROR in predict: {type(exc).__name__}: {exc}")
             failures += 1
             continue
+
+        if args.determinism or args.full:
+            try:
+                failures += _determinism(device, args.checkpoint)
+            except Exception as exc:
+                print(f"  ERROR in determinism: {type(exc).__name__}: {exc}")
+                failures += 1
 
         if args.full:
             try:

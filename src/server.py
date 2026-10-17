@@ -5,6 +5,7 @@ Serves the UI (``src/static/index.html``) and these endpoints:
 * ``GET  /api/status``    -- environment, available devices, resident checkpoints, warmup;
 * ``POST /api/solve``     -- the problem + the solutions -> choice, probabilities, latency;
 * ``POST /api/stability`` -- the same decision under k rotations of the option order;
+* ``POST /api/assess``    -- heuristic reliability flag from a solve + stability payload;
 * ``POST /api/warmup``    -- starts the download/load of the checkpoints in the background.
 
 Startup:  ``uv run python src/server.py``  (or one of the launchers: ``run.sh``, ``run.bat``,
@@ -95,6 +96,15 @@ class StabilityRequest(BaseModel):
     lang: Optional[str] = None
 
 
+class AssessRequest(BaseModel):
+    """The two payloads the frontend already holds, sent back to be combined."""
+
+    solve: Dict[str, Any] = Field(..., description="The full /api/solve response.")
+    stability: Optional[Dict[str, Any]] = Field(
+        None, description="The /api/stability response, if the stability test was run."
+    )
+
+
 class WarmupRequest(BaseModel):
     device: str = "cuda"
     checkpoints: Optional[List[str]] = None
@@ -176,6 +186,20 @@ def api_stability(request: StabilityRequest) -> Dict[str, Any]:
     except Exception as exc:
         log.exception("stability failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/assess")
+def api_assess(request: AssessRequest) -> Dict[str, Any]:
+    """Heuristic reliability flag per device, from a solve response + optional stability one.
+
+    Stateless: the frontend hands back the two payloads it already has, so no per-request state
+    is kept on the server (the reason /api/solve stays replaceable behind a load balancer).
+    """
+    assessments = [
+        {"device": result.get("device"), **engine.reliability(result, request.stability)}
+        for result in (request.solve.get("results") or [])
+    ]
+    return {"assessments": assessments}
 
 
 @app.post("/api/warmup")

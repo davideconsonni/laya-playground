@@ -31,7 +31,8 @@ Rule of thumb: if it can end up rendered in the UI, keep it in Italian; otherwis
 uv sync --python 3.12                 # install/refresh dependencies
 ./run.sh --device cpu                 # Linux/macOS/WSL/Git Bash (run.bat for cmd, run.ps1 for pwsh)
 uv run python src/server.py --warm    # run the server directly
-uv run python src/warmup.py --device both --full   # smoke test: predict, tournament, stability
+uv run python src/warmup.py --device both --full   # smoke test: predict, tournament, stability, determinism
+uv run python src/warmup.py --device cuda --determinism   # same input twice -> identical output
 ```
 
 Docker: see the README. There is no test suite; `warmup.py --full` **is** the smoke test and needs
@@ -39,8 +40,9 @@ the checkpoints downloaded (minutes on first run).
 
 ## Where things live
 
-- `src/engine.py` — device pool, question building, `solve` / `stability` / `status`, budgets.
-  **The place to change behaviour.** It must not import `torch`/`laya` at module level.
+- `src/engine.py` — device pool, question building, `solve` / `stability` / `reliability` /
+  `status`, budgets. **The place to change behaviour.** It must not import `torch`/`laya` at
+  module level.
 - `src/server.py` — FastAPI wiring: middleware, request models, endpoints, CLI entry point, static
   mount for the UI.
 - `src/static/index.html` — the entire UI in one file. No framework, no CDN.
@@ -58,6 +60,9 @@ the checkpoints downloaded (minutes on first run).
   literally, so never use option text as a key.
 - **Weights live in the project** (`.hf-cache/`, or `/models` in the container) so they can be
   deleted in one go. `HF_HOME`/`HF_HUB_CACHE` are set before anything imports `huggingface_hub`.
+- **Determinism**: same input + same parameters -> same output. The stability rotations are random
+  but seeded (`STABILITY_SEED`), so a second run reproduces the orders and the numbers;
+  `warmup.py --determinism` (also under `--full`) checks it.
 - **User-facing strings stay Italian** (see the language conventions above).
 
 ## Configuration

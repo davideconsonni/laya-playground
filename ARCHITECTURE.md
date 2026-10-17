@@ -106,24 +106,39 @@ options (capped), and the UI mirrors the same heuristic when "automatic budget" 
 | `simple` | One `choice` question with all the options. | `auto` with <= 20 solutions, or forced. |
 | `tournament` | Group elimination (`group_size`, default 16), ~256 solutions max. | `auto` with > 20 solutions, or forced. |
 | `long` | Reads a problem longer than the window in windows instead of truncating. `predict_long` takes neither the budgets nor `min_confidence`. | Forced only. |
-| `stability` | Not a strategy: a separate endpoint that rotates `option_order` (see below). | When the UI checkbox is on. |
+| `stability` | Not a strategy: a separate endpoint that permutes `option_order` at random (seeded, see below). | When the UI checkbox is on. |
 
 `solve()` also emits human-readable **notes** (approximate truncation warning, window count,
 "too many solutions for a tournament") that the UI renders as banners.
 
 ## Stability
 
-`stability()` asks the same question `k` times with the option order rotated
-(`option_order = [i+r mod n]`), all in **a single forward pass**, and reports:
+`stability()` asks the same question `k` times with the option order **randomly permuted**
+(`option_order` is a permutation of `range(n)`, drawn from a fixed-seed `random.Random`, all in
+**a single forward pass**), and reports:
 
 - the **mediated** choice and the probabilities averaged over the rotations;
-- the per-rotation choices and confidences;
+- the per-rotation choices and confidences, and the **distribution** of the choices;
 - an **agreement** score and a verdict (`stabile` / `abbastanza stabile` / `instabile` /
   `molto instabile`).
+
+`k` is capped by `MAX_ROTATIONS` (32) and never exceeds the number of distinct permutations that
+exist (`_rotation_cap`), so every rotation is a different order. The seed is fixed
+(`STABILITY_SEED`), which is what keeps the test reproducible: same input, same parameters, same
+rotations. Random permutations (rather than only the cyclic shifts) explore a general subset of
+the `n!` orders instead of a one-parameter family.
 
 It exists because Laya has a documented **position bias**: the same option in different slots
 receives different logits. Mediating over rotations is more stable (not more calibrated) than a
 single answer.
+
+## Reliability flag
+
+`reliability(solve_result, stability_result=None)` is a pure function (no model) that folds
+`answer_confidence`, the rotation **agreement** (when the stability test ran) and the coherence
+with `score`/`noul` (when those questions are on) into one of `ok` / `caution` / `unreliable`,
+with the reasons that fired. It is explicitly a **heuristic**: the frontend sends the two payloads
+back to `POST /api/assess` (stateless, like the rest), which runs this function per device.
 
 ## Concurrency and state
 
@@ -143,6 +158,7 @@ single answer.
 | `GET /health` | Always open; used by the container `HEALTHCHECK` and by hosting platforms. |
 | `POST /api/solve` | Validates, then one call to `engine.solve` per target device. `device: "both"` returns both results plus a per-device `errors` map. |
 | `POST /api/stability` | One call to `engine.stability`. |
+| `POST /api/assess` | `engine.reliability` per device, from a solve payload + an optional stability one. Pure Python, no model. |
 | `POST /api/warmup` | Starts background preloads and returns the state. |
 | `POST /api/unload` | Frees weights, returns `{freed, loaded}`. |
 
@@ -162,6 +178,20 @@ open. The UI reads `?key=` once and keeps it in `localStorage`.
 - Result cards mirror the API payload: badges (device, checkpoint, strategy, latency, gates),
   the ranked options with probability bars, tournament/finalists metadata, extra `score`/`noul`
   blocks, notes, and a raw JSON `<details>`.
+- **Export (client-side)**: the *Esporta per LLM* button renders a single self-contained
+  Markdown dump of the last session (environment, the request as sent, every field of the
+  per-device result, the per-rotation stability data, the interface notes and the raw JSON),
+  with copy-to-clipboard and `.md`/`.json` downloads. It reads the last session from memory, or
+  from `localStorage` after a reload, so it works without a re-run and needs no server endpoint.
+- **Instruction presets** (`engine.INSTRUCTION_PRESETS`, also served in `/api/status`) fill the
+  instruction textarea; the wording stays editable, and the old default is kept as a preset so a
+  wording change can be A/B-tested.
+- The **reliability card** is rendered from `POST /api/assess`; the **Casi & benchmark** section
+  runs a JSON list of cases (optionally with stability) and shows accuracy, mean confidence on the
+  correct/wrong answers, abstention rate and mean agreement, with CSV/JSON export. Cases live in
+  their own `localStorage` key and survive **Pulisci**.
+- **Confronta multilingual / english** runs the same case on two checkpoints (the english run may
+  use an English version of the problem), so the language effect is visible side by side.
 - **Persistence**: input and the last result live in `localStorage`
   (`layaPlayground.v1` / `layaPlayground.lastResult.v1`), both versioned; a payload from an older
   version is ignored.

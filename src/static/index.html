@@ -132,6 +132,29 @@
   .verdict.instabile, .verdict.molto { color: var(--warn); }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid var(--line); border-top-color: var(--accent); border-radius: 50%; animation: sp .7s linear infinite; vertical-align: -1px; margin-right: 6px; }
   @keyframes sp { to { transform: rotate(360deg); } }
+
+  /* Finestra di esportazione: contiene tutto il testo da incollare in un altro LLM. */
+  .modal { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 18px; background: rgba(4, 7, 12, .72); }
+  .modal-box { display: flex; flex-direction: column; gap: 10px; width: min(920px, 100%); max-height: 92vh; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .modal-head b { font-size: 14px; }
+  #export-text { min-height: 340px; max-height: 62vh; }
+
+  /* Indicatore di affidabilita', distribuzione delle rotazioni, tabella benchmark. */
+  .reli { font-weight: 700; }
+  .reli.ok { color: var(--accent-2); }
+  .reli.caution { color: var(--warn); }
+  .reli.unreliable { color: var(--bad); }
+  .reli-reasons { margin: 8px 0 0; padding-left: 18px; font-size: 12px; color: var(--muted); }
+  .dist { display: grid; gap: 6px; margin-top: 8px; }
+  .dist .d { display: grid; grid-template-columns: 60px 1fr auto; gap: 8px; align-items: center; font-size: 12px; }
+  .dist .d .b { height: 6px; background: var(--panel-2); border-radius: 4px; overflow: hidden; }
+  .dist .d .b > i { display: block; height: 100%; background: linear-gradient(90deg, #2f6fd0, var(--accent)); }
+  table.bench { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 10px; }
+  table.bench th, table.bench td { border-bottom: 1px solid var(--line); padding: 4px 6px; text-align: left; }
+  table.bench th { color: var(--muted); font-weight: 500; }
+  table.bench td.ok { color: var(--accent-2); }
+  table.bench td.no { color: var(--bad); }
 </style>
 </head>
 <body>
@@ -198,14 +221,15 @@
 
     <label class="check"><input type="checkbox" id="stability" /> Testa anche la <b>stabilita'</b> (k rotazioni dell'ordine)</label>
     <label class="field" id="rot-wrap" style="display:none">
-      <span>Numero di rotazioni (max 8)</span>
-      <input type="number" id="rotations" value="4" min="1" max="8" />
+      <span>Numero di rotazioni (max 32)</span>
+      <input type="number" id="rotations" value="4" min="1" max="32" />
     </label>
 
     <div class="actions">
       <button class="primary" id="go">Decidi</button>
       <button class="ghost" id="warm">Carica modello</button>
       <button class="ghost" id="clear">Pulisci</button>
+      <button class="ghost" id="export" disabled title="Esporta tutto quello che l'interfaccia mostra (risultato, stabilita', note, JSON) per incollarlo in un altro LLM">Esporta per LLM</button>
     </div>
     <div class="hint" style="margin-top:8px">Ctrl+Enter per eseguire. Il primo caricamento scarica i pesi dal Hub: puo' durare qualche minuto.<br>
       <b>Quello che scrivi resta nel browser</b> (localStorage): ricaricare la pagina non perde problema, soluzioni ne' impostazioni. <i>Pulisci</i> cancella tutto.</div>
@@ -229,6 +253,8 @@
         <span>min_confidence (astensione, vuoto = off)</span>
         <input type="number" id="min_confidence" min="0" max="1" step="0.05" placeholder="es. 0.6" />
       </label>
+      <div class="hint" style="margin:-6px 0 10px">suggerito <b id="suggested_conf">0.5</b> &mdash; con l'astensione attiva il modello puo' rifiutarsi di scegliere sotto soglia. Vuoto = nessuna astensione.
+        <button type="button" class="ghost" id="use_suggested" style="padding:1px 8px;margin-left:6px">usa 0.5</button></div>
 
       <label class="field">
         <span>Lingua forzata (vuoto = rilevata)</span>
@@ -236,8 +262,19 @@
       </label>
 
       <label class="field">
+        <span>Preset istruzioni <i>(per vedere quanto dipende dalla formulazione)</i></span>
+        <select id="instruction_preset"></select>
+      </label>
+
+      <label class="field">
         <span>Istruzioni della domanda <i>(il modello non e' un LLM: non spiega, sceglie)</i></span>
         <textarea id="instructions" class="mono"></textarea>
+      </label>
+
+      <label class="check"><input type="checkbox" id="compare_ckpt" /> Confronta <b>multilingual / english</b> (stesso caso su due checkpoint)</label>
+      <label class="field" id="problem_en-wrap" style="display:none">
+        <span>Problema in inglese <i>(per il checkpoint english; vuoto = usa lo stesso testo)</i></span>
+        <textarea id="problem_en" placeholder="English version of the problem..."></textarea>
       </label>
 
       <label class="check"><input type="checkbox" id="with_quality" /> Aggiungi domanda <b>score</b>: quanto e' buona la migliore soluzione?</label>
@@ -249,17 +286,65 @@
         <span class="hint" id="apikey_hint">si puo' anche passare una volta sola come <code>?key=...</code> nell'URL</span>
       </label>
     </details>
+
+    <details class="adv">
+      <summary>Casi &amp; benchmark</summary>
+
+      <div class="hint" style="margin-top:10px">Un caso = <code>{ "problem": "...", "solutions": ["...", "..."], "expected": 1 }</code>. <b>expected</b> e' l'indice (0-based) o il testo della soluzione attesa; <code>"settings": { ... }</code> opzionale sovrascrive il form. <b>expected</b> omesso = caso senza risposta attesa (conta solo per confidenza/astensione/accordo).</div>
+
+      <div class="actions" style="margin-top:8px">
+        <button type="button" class="ghost" id="case_current">Usa caso corrente</button>
+        <button type="button" class="ghost" id="case_import">Importa file</button>
+        <button type="button" class="ghost" id="case_export">Esporta casi</button>
+        <button type="button" class="ghost" id="case_clear">Svuota casi</button>
+      </div>
+
+      <label class="field" style="margin-top:10px">
+        <span>Casi (JSON) <b id="case_count" style="color:var(--muted)"></b></span>
+        <textarea id="cases" class="mono" style="min-height:120px" placeholder='[{"problem":"...","solutions":["a","b"],"expected":1}]'></textarea>
+      </label>
+      <input type="file" id="case_file" accept=".json,.txt" style="display:none" />
+
+      <label class="check"><input type="checkbox" id="bench_stability" checked /> Nel benchmark esegui anche la <b>stabilita'</b> per ogni caso</label>
+
+      <div class="actions">
+        <button type="button" class="primary" id="bench_run">Esegui benchmark</button>
+        <button type="button" class="ghost" id="bench_csv">Scarica CSV</button>
+        <button type="button" class="ghost" id="bench_json">Scarica JSON</button>
+      </div>
+      <div id="bench_msg" class="hint"></div>
+    </details>
   </div>
 
   <!-- ------------------------------------------------ DESTRA -->
   <div>
     <div id="result" class="empty">Nessun risultato. Incolla problema e soluzioni, poi premi <b>Decidi</b>.</div>
+    <div id="bench"></div>
+  </div>
+</div>
+
+<!-- Esportazione completa: il pulsante apre questa finestra con tutto il testo da incollare
+     in un altro LLM (risultato, stabilita', note/spiegazioni e JSON grezzo). -->
+<div id="export-modal" class="modal" style="display:none">
+  <div class="modal-box">
+    <div class="modal-head">
+      <b>Esportazione completa per un altro LLM</b>
+      <button class="ghost" id="export-close" style="flex:0 0 auto">Chiudi</button>
+    </div>
+    <div class="hint">Copia questo testo (oppure scaricalo) e incollalo in un altro LLM per un parere terzo. Contiene <b>tutto</b> quello che l'interfaccia mostra: ambiente, input, esito per dispositivo, test di stabilita', note/spiegazioni e JSON grezzo.</div>
+    <textarea id="export-text" class="mono" readonly spellcheck="false"></textarea>
+    <div class="actions">
+      <button class="primary" id="export-copy">Copia</button>
+      <button class="ghost" id="export-download">Scarica .md</button>
+      <button class="ghost" id="export-download-json">Scarica .json</button>
+    </div>
+    <div id="export-msg" class="hint"></div>
   </div>
 </div>
 
 <script>
 const $ = (id) => document.getElementById(id);
-const state = { device: 'cuda', strategy: 'auto', status: null, busy: false };
+const state = { device: 'cuda', strategy: 'auto', status: null, busy: false, last: null };
 
 // --- chiave API (solo se il server è pubblicato con LAYA_API_KEY) ---------------------
 // Si prende da ?key=... la prima volta, poi resta in localStorage. Senza chiave sul server
@@ -281,8 +366,17 @@ function apiFetch(path, opts = {}) {
   return fetch(path, opts);
 }
 
-const INSTRUCTIONS_EN = "Which candidate solution best solves the problem described in the state? Pick the single most effective and practically applicable one.";
-const INSTRUCTIONS_IT = "Quale soluzione candidata risolve meglio il problema descritto? Scegli quella piu' efficace e applicabile in pratica.";
+const INSTRUCTIONS_EN = "Which candidate fully eliminates the problem under all stated constraints, including restarts, concurrency and late retries, and does not merely reduce its probability?";
+const INSTRUCTIONS_LEGACY_EN = "Which candidate solution best solves the problem described in the state? Pick the single most effective and practically applicable one.";
+// Fallback finche' /api/status non fornisce i preset di engine.py (stessa lista, stesso ordine).
+let INSTRUCTION_PRESETS = [
+  { id: 'eliminates', label: 'Elimina il problema (default)', text: INSTRUCTIONS_EN },
+  { id: 'legacy', label: 'Versione precedente (efficace e applicabile)', text: INSTRUCTIONS_LEGACY_EN },
+  { id: 'correctness', label: 'Correttezza forte', text: 'Which candidate solution is most likely to be fully correct under every stated constraint? Favour correctness over speed, cost or simplicity, and ignore how easy each option is to implement.' },
+  { id: 'low_risk', label: 'Minimo rischio', text: 'Which candidate solution carries the lowest risk of making things worse or failing under load, partial rollbacks and unexpected inputs? Prefer the option with the smallest blast radius, even when its upside is smaller.' },
+  { id: 'fast', label: 'Rapidita\' di intervento', text: 'Which candidate solution can be deployed and start helping the soonest, with the least coordination and the fewest moving parts? Prefer the fastest effective intervention over the most thorough one.' },
+];
+const SUGGESTED_MIN_CONFIDENCE = 0.5;
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -328,6 +422,7 @@ async function refreshStatus() {
       return null;
     }
     state.status = data;
+    applyDefaults(data.defaults);
     renderPills();
     renderWarmup();
     return data;
@@ -374,6 +469,20 @@ function renderWarmup() {
   }
 }
 
+// Applica una volta i preset di istruzioni e la soglia suggerita che engine.py espone.
+let defaultsApplied = false;
+function applyDefaults(d) {
+  if (!d) return;
+  if (!defaultsApplied && Array.isArray(d.instruction_presets) && d.instruction_presets.length) {
+    fillPresets(d.instruction_presets);
+    defaultsApplied = true;
+    syncPresetFromText();
+  }
+  if (typeof d.suggested_min_confidence === 'number') {
+    $('suggested_conf').textContent = String(d.suggested_min_confidence);
+  }
+}
+
 // ---- input helpers -------------------------------------------------------------------
 function readSolutions() {
   return $('solutions').value.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -404,14 +513,36 @@ $('stability').addEventListener('change', (e) => {
   t.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key === 'Enter') run(); });
 });
 
-function payload() {
-  const solutions = readSolutions();
-  if (!solutions.length) throw new Error('incolla almeno una soluzione (una per riga)');
-  if (!$('problem').value.trim()) throw new Error('incolla il problema');
+// ---- preset istruzioni + astensione suggerita ----------------------------------------
+function fillPresets(presets) {
+  if (Array.isArray(presets) && presets.length) INSTRUCTION_PRESETS = presets;
+  const sel = $('instruction_preset');
+  sel.innerHTML = INSTRUCTION_PRESETS.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('')
+    + '<option value="__custom">Personalizzata</option>';
+  syncPresetFromText();
+}
+function syncPresetFromText() {
+  const text = $('instructions').value;
+  const hit = INSTRUCTION_PRESETS.find((p) => p.text === text);
+  $('instruction_preset').value = hit ? hit.id : '__custom';
+}
+$('instruction_preset').addEventListener('change', (e) => {
+  const p = INSTRUCTION_PRESETS.find((x) => x.id === e.target.value);
+  if (p) { $('instructions').value = p.text; scheduleSave(); }
+});
+$('instructions').addEventListener('input', syncPresetFromText);
+$('use_suggested').addEventListener('click', () => {
+  $('min_confidence').value = String(SUGGESTED_MIN_CONFIDENCE);
+  scheduleSave();
+});
+$('compare_ckpt').addEventListener('change', (e) => {
+  $('problem_en-wrap').style.display = e.target.checked ? '' : 'none';
+});
+fillPresets(INSTRUCTION_PRESETS);
+
+function settings() {
   const num = (id) => { const v = $(id).value.trim(); return v === '' ? null : Number(v); };
   return {
-    problem: $('problem').value,
-    solutions,
     device: state.device,
     checkpoint: $('checkpoint').value,
     strategy: state.strategy,
@@ -426,14 +557,32 @@ function payload() {
   };
 }
 
+function payload() {
+  const solutions = readSolutions();
+  if (!solutions.length) throw new Error('incolla almeno una soluzione (una per riga)');
+  if (!$('problem').value.trim()) throw new Error('incolla il problema');
+  return { problem: $('problem').value, solutions, ...settings() };
+}
+
+// Chiamate API condivise fra il singolo caso e il benchmark: stesse regole di errore.
+async function postJson(path, body) {
+  const r = await apiFetch(path, {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (r.status === 401) throw new Error('serve la chiave API: incollala in Avanzate');
+  if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+  return data;
+}
+
 // ---- persistenza in localStorage ------------------------------------------------------
 // Tutto l'input sopravvive a un reload: incollare un problema lungo e perdere il lavoro
 // perche' hai ricaricato la pagina e' il modo piu' rapido per odiare un playground.
 const STORE_KEY = 'layaPlayground.v1';
 const RESULT_KEY = 'layaPlayground.lastResult.v1';
 const TEXT_IDS = ['problem', 'solutions', 'group_size', 'rotations', 'max_len', 'head_max_len',
-                  'min_confidence', 'lang', 'instructions'];
-const CHECK_IDS = ['stability', 'auto_budget', 'with_quality', 'with_complete'];
+                  'min_confidence', 'lang', 'instructions', 'problem_en'];
+const CHECK_IDS = ['stability', 'auto_budget', 'with_quality', 'with_complete', 'compare_ckpt', 'bench_stability'];
 
 function readStore(key) {
   try { return JSON.parse(localStorage.getItem(key) || 'null'); } catch (e) { return null; }
@@ -455,6 +604,7 @@ function snapshot() {
 function syncVisibility() {
   $('group-wrap').style.display = state.strategy === 'tournament' ? '' : 'none';
   $('rot-wrap').style.display = $('stability').checked ? '' : 'none';
+  $('problem_en-wrap').style.display = $('compare_ckpt').checked ? '' : 'none';
   $('head_max_len').disabled = $('auto_budget').checked;
   $('max_len').disabled = $('auto_budget').checked;
 }
@@ -473,11 +623,27 @@ function restore() {
   if (saved.device) setSeg('device', saved.device);
   if (saved.strategy) setSeg('strategy', saved.strategy);
   syncVisibility();
+  syncPresetFromText();
   return true;
 }
 
-function saveResult(solve, stability) {
-  writeStore(RESULT_KEY, { v: 1, at: Date.now(), solve, stability: stability || null });
+// Oltre alla risposta salviamo anche l'input inviato (problema, soluzioni, parametri e
+// istruzioni) e lo stato dell'ambiente: cosi' l'esportazione per un altro LLM resta completa
+// anche dopo un reload, quando il form potrebbe essere cambiato.
+function saveResult(solve, stability, request, stabilityRequest, stabilityError, assess, meta) {
+  const sess = {
+    v: 1, at: Date.now(),
+    solve, stability: stability || null,
+    request: request || null,
+    stability_request: stabilityRequest || null,
+    stability_error: stabilityError || null,
+    assess: assess || null,
+    meta: meta || null,
+    status: state.status || null,
+  };
+  writeStore(RESULT_KEY, sess);
+  state.last = sess;
+  syncExport();
 }
 
 function restoreResult() {
@@ -488,7 +654,8 @@ function restoreResult() {
   out.className = '';
   out.innerHTML =
     `<div class="notice warn">Risultato della sessione precedente (${esc(when)}): premi <b>Decidi</b> per rieseguirlo sullo stato attuale.</div>`
-    + renderSolve(last.solve) + (last.stability ? renderStability(last.stability) : '');
+    + renderSolve(last.solve) + (last.stability ? renderStability(last.stability) : '')
+    + (last.assess ? renderAssess(last.assess.assessments) : '');
   return true;
 }
 
@@ -499,12 +666,16 @@ function clearAll() {
   $('auto_budget').checked = true;
   $('rotations').value = 4;
   $('group_size').value = 16;
-  $('instructions').value = INSTRUCTIONS_EN;
+  $('instructions').value = INSTRUCTION_PRESETS[0] ? INSTRUCTION_PRESETS[0].text : INSTRUCTIONS_EN;
+  syncPresetFromText();
   const cuda = !!(state.status && state.status.torch && state.status.torch.cuda_available);
   setSeg('device', cuda ? 'cuda' : 'cpu');
   setSeg('strategy', 'auto');
   syncVisibility();
   refreshCounter();
+  state.last = null;
+  $('export-modal').style.display = 'none';
+  syncExport();
   const out = $('result');
   out.className = 'empty';
   out.innerHTML = 'Nessun risultato. Incolla problema e soluzioni, poi premi <b>Decidi</b>.';
@@ -536,7 +707,12 @@ function optionRows(ranked, winnerKey) {
 function gateBadges(r) {
   let html = '';
   if (r.low_confidence) html += `<span class="badge low">low confidence</span>`;
-  if (r.abstention) html += `<span class="badge ${r.abstention === 'abstained' ? 'low' : ''}">gate: ${esc(r.abstention)}${r.abstention_threshold != null ? ' @ ' + r.abstention_threshold : ''}</span>`;
+  if (r.abstention) {
+    html += `<span class="badge ${r.abstention === 'abstained' ? 'low' : ''}">gate: ${esc(r.abstention)}${r.abstention_threshold != null ? ' @ ' + r.abstention_threshold : ''}</span>`;
+  } else if (r.answer_confidence != null && Number(r.answer_confidence) < SUGGESTED_MIN_CONFIDENCE) {
+    // Astensione non attiva: segnaliamo che con la soglia suggerita sarebbe stato "astenuto".
+    html += `<span class="badge low">sotto ${SUGGESTED_MIN_CONFIDENCE} (astensione non attiva)</span>`;
+  }
   return html;
 }
 
@@ -596,6 +772,7 @@ function renderStability(s) {
       <span class="badge">stabilita'</span>
       <span class="badge">${esc(s.checkpoint || '?')}</span>
       <span class="badge">${s.rotations} rotazioni</span>
+      <span class="badge">seed ${s.seed != null ? s.seed : '?'}</span>
       <span class="badge">${s.latency_ms} ms</span>
     </header>
     <div class="body">
@@ -603,6 +780,7 @@ function renderStability(s) {
         &middot; accordo <b>${(s.agreement * 100).toFixed(0)}%</b> &middot; ${s.distinct_choices} scelte distinte su ${s.rotations}</span></div>
       <h2 style="margin:10px 0 0">Probabilita' mediate sulle rotazioni</h2>
       ${optionRows(s.mean_ranked, s.mediated)}
+      ${distributionBlock(s)}
       <h2 style="margin:14px 0 0">Cosa ha scelto ogni rotazione</h2>
       <table class="rot">
         <tr><th>rot</th><th>ordine presentato</th><th>scelta</th><th>conf</th></tr>
@@ -620,42 +798,410 @@ function renderStability(s) {
   return html;
 }
 
+// Distribuzione delle scelte tra le rotazioni (conteggi, non solo la media).
+function distributionBlock(s) {
+  const dist = s.distribution || [];
+  if (!dist.length) return '';
+  return `<h2 style="margin:14px 0 0">Distribuzione delle scelte</h2><div class="dist">`
+    + dist.map((d) => `<div class="d"><span>${esc(d.choice)}</span>` +
+        `<span class="b"><i style="width:${Math.max(2, (d.share || 0) * 100)}%"></i></span>` +
+        `<span>${d.count}/${s.rotations}</span></div>`).join('')
+    + '</div>';
+}
+
+// Indicatore unico di affidabilita' (euristica lato engine): un blocco per dispositivo.
+function renderAssess(assessments) {
+  if (!assessments || !assessments.length) return '';
+  let html = `<div class="card" style="margin-top:14px">
+    <header><span class="badge">affidabilita' (euristica)</span><span class="badge">confidenza + accordo + coerenza</span></header>
+    <div class="body">`;
+  for (const a of assessments) {
+    html += `<div class="meta"><span>${a.device ? esc(a.device) + ' &mdash; ' : ''}<span class="reli ${esc(a.level)}">${esc(a.label)}</span></span></div>`;
+    if (a.reasons && a.reasons.length) {
+      html += '<ul class="reli-reasons">' + a.reasons.map((r) => `<li>${esc(r)}</li>`).join('') + '</ul>';
+    } else {
+      html += '<div class="hint">nessun segnale di inaffidabilita\' tra quelli controllati.</div>';
+    }
+  }
+  html += `<div class="hint" style="margin-top:10px">${esc((assessments[0] || {}).note || '')}</div>`;
+  html += '</div></div>';
+  return html;
+}
+
+// ---- esportazione completa per un altro LLM -------------------------------------------
+// Il pulsante "Esporta per LLM" costruisce un documento di testo con *tutto* quello che
+// l'interfaccia mostra: ambiente, input richiesto, esito completo per ogni dispositivo (tutti
+// i campi, non solo quelli renderizzati), test di stabilita', note/spiegazioni e il JSON grezzo
+// delle risposte. Serve a incollare l'output in un altro LLM per un parere terzo.
+function f3(v) { return v == null ? 'n/d' : Number(v).toFixed(3); }
+function fp(p) { return (Number(p || 0) * 100).toFixed(2) + '%'; }
+function oneline(s) { return String(s == null ? '' : s).replace(/\s+/g, ' ').trim(); }
+function padKey(i) { return 's' + String(i).padStart(2, '0'); }
+const FENCE = '```';
+
+// Mappa autorevole chiave -> testo delle opzioni, presa dalle risposte (che scartano le
+// soluzioni vuote o duplicate). Fallback: la stabilita' se c'e' solo quella.
+function solutionIndex(sess) {
+  const map = {};
+  const solve = sess.solve;
+  if (solve && solve.results) {
+    solve.results.forEach((r) => {
+      (r.ranked || []).forEach((o) => { map[o.key] = o.text; });
+      (r.eliminated || []).forEach((o) => { map[o.key] = o.text; });
+    });
+  }
+  if (sess.stability && sess.stability.mean_ranked) {
+    sess.stability.mean_ranked.forEach((o) => { if (!(o.key in map)) map[o.key] = o.text; });
+  }
+  return map;
+}
+
+function buildDump(sess) {
+  const L = [];
+  const add = (s = '') => L.push(s);
+  const st = sess.status || state.status || null;
+  const t = (st && st.torch) || {};
+  const req = sess.request || {};
+  const solve = sess.solve || null;
+  const stab = sess.stability || null;
+  const stabReq = sess.stability_request || stab || null;
+  const uiSub = (document.querySelector('header .sub') || {}).textContent || '';
+
+  add('# Laya playground \u2014 esportazione completa della sessione');
+  add('');
+  add('> Documento generato dall\'interfaccia per essere incollato in un **altro LLM** e chiedere un parere terzo: contiene tutto quello che l\'interfaccia mostra (ambiente, input, esito completo per dispositivo, stabilita\', note/spiegazioni e JSON grezzo).');
+  add('');
+  add(`- generato: ${new Date(sess.at || Date.now()).toLocaleString()}`);
+  add(`- origine: ${sess.fromStore ? 'risultato ripristinato da localStorage (sessione precedente)' : 'ultima esecuzione in questa sessione'}`);
+  if (solve && solve.mode) add(`- modalita\' dispositivo richiesta: ${solve.mode}`);
+  add('');
+
+  // --- contesto -----------------------------------------------------------------------
+  add('## Cos\'e\' questo risultato');
+  add('');
+  if (uiSub) add(`> ${oneline(uiSub)}`);
+  add('');
+  add('Laya e\' un motore decisionale **non autoregressivo**: dato un problema (lo "stato") e una lista di soluzioni candidate, sceglie la migliore e ne espone le probabilita\' calibrate in un solo forward pass. **Non e\' un LLM: non genera testo e non spiega la scelta**, mostra probabilita\' e confidenza. Le chiavi delle opzioni sono neutre (s00, s01, ...) e seguono l\'ordine in cui le soluzioni sono state incollate.');
+  add('');
+
+  // --- ambiente -----------------------------------------------------------------------
+  if (st) {
+    add('## Ambiente');
+    add('');
+    add(`- python ${st.python}  \u00b7  laya ${st.laya}  \u00b7  transformers ${st.transformers}`);
+    add(`- torch ${t.torch}  \u00b7  CUDA ${t.cuda_available ? 'si\'' : 'no'}${t.gpu_name ? '  \u00b7  GPU ' + t.gpu_name : ''}${t.vram_total_mb != null ? `  \u00b7  VRAM ${t.vram_free_mb}/${t.vram_total_mb} MB` : ''}`);
+    add(`- thread: ${st.threads}  \u00b7  cache pesi: ${st.hf_cache}${st.hf_cache_exists ? '' : ' (assente)'}  \u00b7  token HF: ${st.token_present ? 'si\'' : 'no'}`);
+    const loaded = Object.entries(st.loaded || {}).map(([d, m]) => `${d}: ${(m || []).join(', ') || 'nessuno'}`).join('  \u00b7  ');
+    add(`- checkpoint in memoria: ${loaded || 'nessuno'}`);
+    const warm = Object.entries(st.warmup || {}).map(([d, v]) => `${d}: ${v.state}${v.seconds != null ? ' (' + v.seconds + 's)' : ''}${v.detail ? ' \u2014 ' + v.detail : ''}`).join('  \u00b7  ');
+    if (warm) add(`- warmup: ${warm}`);
+    if (st.errors && Object.keys(st.errors).length) add(`- errori del pool: ${JSON.stringify(st.errors)}`);
+    add('');
+  }
+
+  // --- input --------------------------------------------------------------------------
+  add('## Input richiesto');
+  add('');
+  add('Problema (lo "stato"):');
+  add(FENCE);
+  add(req.problem != null ? req.problem : '(n/d)');
+  add(FENCE);
+  add('');
+  const raw = Array.isArray(req.solutions) ? req.solutions : [];
+  add(`Soluzioni candidate incollate (${raw.length}):`);
+  add('');
+  raw.forEach((s, i) => add(`${i + 1}. ${oneline(s)}`));
+  const kmap = solutionIndex(sess);
+  const kkeys = Object.keys(kmap).sort();
+  if (kkeys.length) {
+    add('');
+    add('Mappa usata dal modello (chiave -> soluzione):');
+    add('');
+    kkeys.forEach((k) => add(`- ${k}: ${oneline(kmap[k])}`));
+  }
+  if (solve && solve.results && solve.results[0] && raw.length !== solve.results[0].n_solutions) {
+    add('');
+    add(`(nota: hai incollato ${raw.length} righe ma il modello ha usato ${solve.results[0].n_solutions} soluzioni distinte: le righe vuote o duplicate vengono scartate)`);
+  }
+  add('');
+  add(`- device: ${req.device}  \u00b7  checkpoint: ${req.checkpoint}  \u00b7  strategia: ${req.strategy}`);
+  add(`- group_size: ${req.group_size}  \u00b7  max_len (richiesto): ${req.max_len == null ? 'auto' : req.max_len}  \u00b7  head_max_len (richiesto): ${req.head_max_len == null ? 'auto' : req.head_max_len}`);
+  add(`- min_confidence: ${req.min_confidence == null ? 'off' : req.min_confidence}  \u00b7  lingua forzata: ${req.lang || 'rilevata'}  \u00b7  with_quality: ${req.with_quality}  \u00b7  with_complete: ${req.with_complete}`);
+  const rotReq = stabReq && stabReq.rotations != null ? stabReq.rotations : (stab ? stab.rotations : null);
+  add(`- test di stabilita\': ${stab ? 'si\'' + (rotReq != null ? ` (${rotReq} rotazioni)` : '') : 'no'}`);
+  if (sess.meta && sess.meta.compare) {
+    add(`- confronto checkpoint: multilingual + english (problema in inglese: ${sess.meta.problem_en ? 'fornito' : 'non fornito, stesso testo'})`);
+  }
+  add('');
+  add('Istruzioni della domanda (modificabili dall\'utente):');
+  add(FENCE);
+  add(req.instructions ? req.instructions : INSTRUCTIONS_EN + '   [default]');
+  add(FENCE);
+  add('');
+
+  // --- esito --------------------------------------------------------------------------
+  if (solve && solve.results && solve.results.length) {
+    add('## Esito (per dispositivo)');
+    solve.results.forEach((r, i) => {
+      add('');
+      add(`### ${r.device}${solve.results.length > 1 ? ` (${i + 1}/${solve.results.length})` : ''}`);
+      add('');
+      add(`- checkpoint usato: **${r.checkpoint || '?'}**  \u00b7  dtype: ${r.dtype || 'n/d'}`);
+      add(`- strategia: ${r.strategy}  \u00b7  motivo: ${r.strategy_reason || '-'}`);
+      add(`- routing: ${r.reason || '-'}`);
+      add(`- latenza: ${r.latency_ms} ms  \u00b7  soluzioni: ${r.n_solutions}  \u00b7  budget effettivi: max_len ${r.budgets.max_len} / head_max_len ${r.budgets.head_max_len}`);
+      if (r.usage) add(`- usage: ${JSON.stringify(r.usage)}`);
+      add('');
+      add(`**Esito: scelta = ${r.choice || 'n/d'}**  \u00b7  answer_confidence = ${f3(r.answer_confidence)}  \u00b7  confidence = ${f3(r.confidence)}`);
+      add(`- low_confidence: ${r.low_confidence}  \u00b7  astensione: ${r.abstention == null ? 'no' : r.abstention + (r.abstention_threshold != null ? ' @ ' + r.abstention_threshold : '')}`);
+      add('');
+      add('Classifica completa (probabilita\' di Laya per ogni opzione):');
+      add('');
+      (r.ranked || []).forEach((o, j) => {
+        add(`${j + 1}. ${o.key}  ${fp(o.prob)}  ${oneline(o.text)}${o.key === r.choice ? '   <-- scelta' : ''}`);
+      });
+      if (r.eliminated && r.eliminated.length) {
+        add('');
+        add(`eliminate dal tournament (${r.eliminated.length}): ${r.eliminated.map((o) => o.key).join(', ')}`);
+      }
+      if (r.tournament) {
+        add('');
+        add(`tournament: ${r.tournament.rounds} round, gruppi da ${r.tournament.group_size}, finaliste: ${(r.tournament.finalists || []).map((o) => `${o.key}=${oneline(o.text)}`).join(' | ')}`);
+      }
+      const q = r.extras && r.extras.quality;
+      const c = r.extras && r.extras.complete;
+      if (q || c) {
+        add('');
+        add('Domande extra:');
+        if (q) add(`- score (quanto e\' buona la migliore soluzione): livello ${q.top ? q.top.key : 'n/d'} (${q.top ? oneline(q.top.text) : 'n/d'})  \u00b7  conf ${f3(q.answer_confidence)}`);
+        if (c) add(`- noul (esiste una soluzione che risolve del tutto): ${JSON.stringify(c)}`);
+      }
+      if (r.notes && r.notes.length) {
+        add('');
+        add('Note dell\'interfaccia:');
+        r.notes.forEach((n) => add(`- ${n}`));
+      }
+      add('');
+      add('Richiesta effettiva per questo dispositivo (grezzo):');
+      add(FENCE + 'json');
+      add(JSON.stringify(r.requested || {}, null, 2));
+      add(FENCE);
+    });
+    add('');
+  }
+
+  // --- stabilita' ---------------------------------------------------------------------
+  if (stab) {
+    add('## Test di stabilita\' (rotazioni dell\'ordine)');
+    add('');
+    add(`- checkpoint: ${stab.checkpoint || '?'}  \u00b7  rotazioni: ${stab.rotations}  \u00b7  seed: ${stab.seed != null ? stab.seed : '?'}  \u00b7  soluzioni: ${stab.n_solutions}  \u00b7  latenza: ${stab.latency_ms} ms`);
+    add(`- budget effettivi: max_len ${stab.budgets.max_len} / head_max_len ${stab.budgets.head_max_len}`);
+    add(`- **verdetto: ${stab.verdict}**  \u00b7  accordo: ${(Number(stab.agreement) * 100).toFixed(0)}%  \u00b7  scelte distinte: ${stab.distinct_choices} su ${stab.rotations}`);
+    add(`- scelta mediata: **${stab.mediated}**`);
+    if (stab.votes) add(`- voti: ${JSON.stringify(stab.votes)}`);
+    add('');
+    add('Probabilita\' mediate sulle rotazioni:');
+    add('');
+    (stab.mean_ranked || []).forEach((o, j) => add(`${j + 1}. ${o.key}  ${fp(o.prob)}  ${oneline(o.text)}${o.key === stab.mediated ? '   <-- mediata' : ''}`));
+    if (stab.distribution && stab.distribution.length) {
+      add('');
+      add('Distribuzione delle scelte tra le rotazioni:');
+      add('');
+      stab.distribution.forEach((d) => add(`- ${d.choice}: ${d.count}/${stab.rotations} (${(Number(d.share) * 100).toFixed(0)}%)`));
+    }
+    add('');
+    add('Cosa ha scelto ogni rotazione (l\'ordine elenca quali chiavi finiscono nei vari slot):');
+    add('');
+    (stab.per_rotation || []).forEach((p) => {
+      const order = (p.order || []).map(padKey).join(' -> ');
+      const probs = Object.keys(p.probabilities || {}).sort().map((k) => `${k} ${fp(p.probabilities[k])}`).join('  ');
+      add(`- rot ${p.rotation}: ordine ${order}  \u00b7  scelta ${p.choice}${p.choice === stab.mediated ? '' : ' (diversa dalla mediata)'}  \u00b7  conf ${f3(p.confidence)}`);
+      add(`    probabilita\': ${probs}`);
+    });
+    add('');
+    add(`Spiegazione dell\'interfaccia: ${stab.note}`);
+    add('');
+  }
+
+  // --- affidabilita' (euristica) -------------------------------------------------------
+  const assess = sess.assess && sess.assess.assessments;
+  if (assess && assess.length) {
+    add('## Affidabilita\' (euristica)');
+    add('');
+    assess.forEach((a) => {
+      add(`- ${a.device ? a.device + ': ' : ''}**${a.label}** (${a.level})`);
+      (a.reasons || []).forEach((r) => add(`    - ${r}`));
+    });
+    add('');
+    add(`Nota: ${(assess[0] || {}).note || ''}`);
+    add('');
+  }
+
+  // --- errori -------------------------------------------------------------------------
+  const errs = solve ? Object.entries(solve.errors || {}) : [];
+  if (errs.length || sess.stability_error) {
+    add('## Errori');
+    add('');
+    errs.forEach(([d, m]) => add(`- ${d}: ${m}`));
+    if (sess.stability_error) add(`- stabilita\': ${sess.stability_error}`);
+    add('');
+  }
+
+  // --- spiegazioni / legenda ----------------------------------------------------------
+  add('## Spiegazioni e legenda');
+  add('');
+  add('- **scelta / choice**: chiave dell\'opzione scelta dal modello (s00, s01, ...).');
+  add('- **answer_confidence**: confidenza dichiarata da Laya per la risposta (0-1); alta non vuol dire "corretta".');
+  add('- **confidence**: confidenza della singola risposta o della singola rotazione.');
+  add('- **low_confidence**: il gate interno di Laya segnala che la risposta e\' sotto la soglia di confidenza.');
+  add('- **astensione (abstention)**: soglia `min_confidence` chiesta nell\'input; con "abstained" il modello non sceglie.');
+  add('- **agreement**: frazione delle rotazioni d\'accordo con la scelta mediata.');
+  add('- **verdetto (verdict)**: giudizio sulla stabilita\' (stabile / abbastanza stabile / instabile / molto instabile).');
+  add('- **position bias**: la stessa opzione in slot diversi riceve logit diversi; la media sulle rotazioni e\' piu\' stabile, non piu\' calibrata.');
+  add('- **budget**: le opzioni condividono un budget di token (`head_max_len`); oltre ~20 opzioni conviene la strategia `tournament`.');
+  add('- **affidabilita\' (euristica)**: combina confidenza, accordo tra rotazioni e coerenza con `score`/`noul`; non e\' una probabilita\' ne\' una calibrazione.');
+  add('- **distribuzione**: quante delle rotazioni hanno scelto ciascuna opzione.');
+  add('- **astensione suggerita**: se `min_confidence` e\' vuoto la UI segnala le risposte sotto la soglia suggerita; il gate vero si attiva solo impostando `min_confidence`.');
+  add('- **checkpoint English**: fuori dall\'inglese puo\' crollare restando sicuro di se\'; per l\'italiano si usa `multilingual`.');
+  add('');
+
+  // --- JSON grezzo --------------------------------------------------------------------
+  add('## JSON grezzo');
+  add('');
+  if (solve) {
+    add('### /api/solve');
+    add(FENCE + 'json');
+    add(JSON.stringify(solve, null, 2));
+    add(FENCE);
+    add('');
+  }
+  if (stab) {
+    add('### /api/stability');
+    add(FENCE + 'json');
+    add(JSON.stringify(stab, null, 2));
+    add(FENCE);
+    add('');
+  }
+  add('### input inviato (request)');
+  add(FENCE + 'json');
+  add(JSON.stringify({ solve: req, stability: stabReq }, null, 2));
+  add(FENCE);
+
+  return L.join('\n');
+}
+
+// Ultima sessione disponibile: prima quella in memoria, altrimenti quella salvata su disco.
+function currentSession() {
+  if (state.last) return state.last;
+  const last = readStore(RESULT_KEY);
+  if (!last || last.v !== 1 || !last.solve) return null;
+  return Object.assign({ fromStore: true }, last);
+}
+
+function syncExport() { $('export').disabled = !currentSession(); }
+
+let dumpText = '';
+$('export').addEventListener('click', () => {
+  const sess = currentSession();
+  if (!sess) return;
+  dumpText = buildDump(sess);
+  $('export-text').value = dumpText;
+  $('export-msg').textContent = '';
+  $('export-modal').style.display = 'flex';
+  $('export-text').scrollTop = 0;
+});
+$('export-close').addEventListener('click', () => { $('export-modal').style.display = 'none'; });
+$('export-modal').addEventListener('click', (e) => { if (e.target === $('export-modal')) $('export-modal').style.display = 'none'; });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') $('export-modal').style.display = 'none'; });
+
+$('export-copy').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('export-text').value);
+    $('export-msg').textContent = 'copiato negli appunti: ora incollalo nell\'altro LLM.';
+  } catch (e) {
+    $('export-text').focus(); $('export-text').select();
+    $('export-msg').textContent = 'copia automatica non disponibile: il testo e\' selezionato, premi Ctrl+C.';
+  }
+});
+
+function downloadFile(name, text, mime) {
+  const blob = new Blob([text], { type: (mime || 'text/plain') + ';charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+function fileStamp() { return new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-'); }
+
+$('export-download').addEventListener('click', () => downloadFile(`laya-sessione-${fileStamp()}.md`, $('export-text').value, 'text/markdown'));
+$('export-download-json').addEventListener('click', () => {
+  const sess = currentSession() || {};
+  const payload = {
+    generated: new Date().toISOString(),
+    request: sess.request || null,
+    stability_request: sess.stability_request || null,
+    solve: sess.solve || null,
+    stability: sess.stability || null,
+    status: sess.status || state.status || null,
+  };
+  downloadFile(`laya-sessione-${fileStamp()}.json`, JSON.stringify(payload, null, 2), 'application/json');
+});
+
 // ---- azioni --------------------------------------------------------------------------
 async function run() {
   if (state.busy) return;
   const out = $('result');
+  $('bench').innerHTML = '';
   let body;
   try { body = payload(); }
   catch (e) { out.innerHTML = `<div class="notice err">${esc(e.message)}</div>`; return; }
 
   state.busy = true; $('go').disabled = true;
   const wantStability = $('stability').checked;
+  const compare = $('compare_ckpt').checked;
+  const problemEn = $('problem_en').value.trim();
   const stratNote = (wantStability && body.strategy === 'tournament')
     ? `<div class="notice warn">La stabilita' usa sempre la strategia semplice: il tournament rimuove <code>option_order</code>, che serve alle rotazioni.</div>` : '';
-  out.innerHTML = `${stratNote}<div class="notice warn"><span class="spin"></span>inferenza su <b>${esc(body.device)}</b>&hellip; il primo giro puo' richiedere minuti (download dei pesi).</div>`;
+  const where = compare ? 'multilingual + english' : esc(body.device);
+  out.innerHTML = `${stratNote}<div class="notice warn"><span class="spin"></span>inferenza su <b>${where}</b>&hellip; il primo giro puo' richiedere minuti (download dei pesi).</div>`;
 
   try {
-    const r = await apiFetch('/api/solve', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
-    });
-    const data = await r.json();
-    if (r.status === 401) throw new Error('serve la chiave API: incollala in Avanzate');
-    if (!r.ok) throw new Error(data.detail || ('HTTP ' + r.status));
+    let data;
+    if (compare) {
+      // Stesso caso su due checkpoint. Il checkpoint english usa la versione inglese del
+      // problema quando c'e', altrimenti lo stesso testo: cosi' si isola l'effetto della lingua.
+      const first = { ...body, checkpoint: 'multilingual' };
+      const second = { ...body, checkpoint: 'english', problem: problemEn || body.problem };
+      const settled = await Promise.allSettled([postJson('/api/solve', first), postJson('/api/solve', second)]);
+      const results = []; const errors = {};
+      if (settled[0].status === 'fulfilled') results.push(...settled[0].value.results);
+      else errors['multilingual'] = settled[0].reason.message;
+      if (settled[1].status === 'fulfilled') results.push(...settled[1].value.results);
+      else errors['english'] = settled[1].reason.message;
+      if (!results.length) throw new Error(Object.values(errors).join(' | ') || 'nessun risultato');
+      data = { mode: 'compare', results, errors };
+    } else {
+      data = await postJson('/api/solve', body);
+    }
+
     let html = renderSolve(data);
-    let stabData = null;
+    let stabData = null, stabBody = null, stabErr = null;
     if (wantStability) {
       const rot = Number($('rotations').value) || 4;
-      const stabBody = { ...body, strategy: 'simple', rotations: rot };
-      const rs = await apiFetch('/api/stability', {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(stabBody),
-      });
-      const sd = await rs.json();
-      if (rs.ok) { stabData = sd; html += renderStability(sd); }
-      else { html += `<div class="notice err">stabilita' fallita: ${esc(sd.detail || rs.status)}</div>`; }
+      stabBody = { ...body, strategy: 'simple', rotations: rot };
+      try { stabData = await postJson('/api/stability', stabBody); html += renderStability(stabData); }
+      catch (e) { stabErr = e.message; html += `<div class="notice err">stabilita' fallita: ${esc(stabErr)}</div>`; }
     }
+
+    let assess = null;
+    try { assess = await postJson('/api/assess', { solve: data, stability: stabData }); }
+    catch (e) { /* l'indicatore e' opzionale: se fallisce, il resto del risultato resta */ }
+    if (assess) html += renderAssess(assess.assessments);
+
     out.className = '';
     out.innerHTML = html;
-    saveResult(data, stabData);
+    saveResult(data, stabData, body, stabBody, stabErr, assess, { compare, problem_en: problemEn || null });
     scheduleSave();
     refreshStatus();
   } catch (e) {
@@ -665,6 +1211,200 @@ async function run() {
     state.busy = false; $('go').disabled = false;
   }
 }
+
+// ---- casi & benchmark ----------------------------------------------------------------
+// Casi ripetibili (problema + soluzioni + risposta attesa + eventuali impostazioni) per
+// misurare accuratezza, confidenza, astensioni e accordo. Il formato e' lo stesso dell'export.
+const CASES_KEY = 'layaPlayground.cases.v1';
+
+function readCases() {
+  const raw = $('cases').value.trim();
+  if (!raw) return [];
+  let parsed;
+  try { parsed = JSON.parse(raw); }
+  catch (e) { throw new Error('i casi non sono JSON valido: ' + e.message); }
+  const list = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.cases) ? parsed.cases : null);
+  if (!list) throw new Error('i casi devono essere un array di {problem, solutions, expected}');
+  return list.filter((c) => c && typeof c.problem === 'string' && Array.isArray(c.solutions) && c.solutions.length);
+}
+
+function updateCaseCount() {
+  try { $('case_count').textContent = '(' + readCases().length + ')'; }
+  catch (e) { $('case_count').textContent = '(JSON non valido)'; }
+}
+function writeCases(cases) {
+  $('cases').value = JSON.stringify(cases, null, 2);
+  updateCaseCount();
+  writeStore(CASES_KEY, cases);
+}
+
+function benchMsg(text) { $('bench_msg').textContent = text || ''; }
+
+$('cases').addEventListener('input', updateCaseCount);
+$('case_current').addEventListener('click', () => {
+  let cases;
+  try { cases = readCases(); } catch (e) { cases = []; }
+  let base;
+  try { base = payload(); } catch (e) { benchMsg(e.message); return; }
+  cases.push({ name: 'caso ' + (cases.length + 1), problem: base.problem, solutions: base.solutions, expected: null });
+  writeCases(cases);
+  benchMsg('aggiunto il caso corrente (' + cases.length + ' in totale).');
+});
+$('case_clear').addEventListener('click', () => { writeCases([]); benchMsg('casi svuotati.'); });
+$('case_export').addEventListener('click', () => {
+  try { downloadFile(`laya-casi-${fileStamp()}.json`, JSON.stringify(readCases(), null, 2), 'application/json'); }
+  catch (e) { benchMsg(e.message); }
+});
+$('case_import').addEventListener('click', () => $('case_file').click());
+$('case_file').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const parsed = JSON.parse(String(reader.result));
+      writeCases(Array.isArray(parsed) ? parsed : (parsed.cases || []));
+      benchMsg('importati casi da ' + file.name + '.');
+    } catch (err) { benchMsg('import fallito: ' + err.message); }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+// Chiave attesa del caso: indice (numero o stringa numerica) oppure testo della soluzione.
+function expectedKey(c, res) {
+  const exp = c.expected;
+  if (exp == null || exp === '') return null;
+  const ranked = (res && res.results && res.results[0] && res.results[0].ranked) || [];
+  if (typeof exp === 'number' || /^\d+$/.test(String(exp).trim())) return 's' + String(Number(exp)).padStart(2, '0');
+  const norm = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim().toLowerCase();
+  const want = norm(exp);
+  for (const o of ranked) if (norm(o.text) === want) return o.key;
+  const i = (c.solutions || []).findIndex((s) => norm(s) === want);
+  return i >= 0 ? 's' + String(i).padStart(2, '0') : null;
+}
+
+function benchMetrics(rows) {
+  const graded = rows.filter((r) => r.expected != null && !r.error);
+  const correct = graded.filter((r) => r.correct);
+  const wrong = graded.filter((r) => !r.correct);
+  const mean = (arr, f) => {
+    const v = arr.map(f).filter((x) => typeof x === 'number' && isFinite(x));
+    return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+  };
+  return {
+    n: rows.length,
+    graded: graded.length,
+    correct: correct.length,
+    accuracy: graded.length ? correct.length / graded.length : null,
+    conf_correct: mean(correct, (r) => r.answer_confidence),
+    conf_wrong: mean(wrong, (r) => r.answer_confidence),
+    abstentions: rows.filter((r) => r.abstained).length,
+    agreement_mean: mean(rows, (r) => r.agreement),
+    errors: rows.filter((r) => r.error).length,
+  };
+}
+
+function pctOrDash(v) { return v == null ? 'n/d' : (v * 100).toFixed(1) + '%'; }
+function numOrDash(v, d = 3) { return v == null ? 'n/d' : Number(v).toFixed(d); }
+
+function renderBench(rows, metrics) {
+  const box = $('bench');
+  box._rows = rows;
+  box._metrics = metrics;
+  box.innerHTML = `<div class="card" style="margin-top:18px">
+    <header>
+      <span class="badge">benchmark</span>
+      <span class="badge">${metrics.n} casi</span>
+      <span class="badge">accuratezza ${pctOrDash(metrics.accuracy)}</span>
+      <span class="badge">astensioni ${metrics.abstentions}</span>
+    </header>
+    <div class="body">
+      <div class="meta">
+        <span>valutati: <b>${metrics.graded}</b></span>
+        <span>corretti: <b>${metrics.correct}</b></span>
+        <span>conf. media corretti: <b>${numOrDash(metrics.conf_correct)}</b></span>
+        <span>conf. media errati: <b>${numOrDash(metrics.conf_wrong)}</b></span>
+        <span>astensioni: <b>${pctOrDash(metrics.n ? metrics.abstentions / metrics.n : null)}</b></span>
+        <span>accordo medio: <b>${numOrDash(metrics.agreement_mean)}</b></span>
+        ${metrics.errors ? `<span>errori: <b>${metrics.errors}</b></span>` : ''}
+      </div>
+      <table class="bench">
+        <tr><th>caso</th><th>atteso</th><th>scelta</th><th>esito</th><th>answer_conf</th><th>ast.</th><th>accordo</th></tr>
+        ${rows.map((r) => {
+          const cls = r.error ? 'no' : (r.expected == null ? '' : (r.correct ? 'ok' : 'no'));
+          const esito = r.error ? esc(r.error) : (r.expected == null ? 'n/d' : (r.correct ? 'giusto' : 'sbagliato'));
+          return `<tr><td>${esc(r.name)}</td><td>${r.expected != null ? esc(r.expected) : '-'}</td><td>${r.choice != null ? esc(r.choice) : '-'}</td><td class="${cls}">${esito}</td><td>${numOrDash(r.answer_confidence)}</td><td>${r.abstained ? 'si' : ''}</td><td>${numOrDash(r.agreement)}</td></tr>`;
+        }).join('')}
+      </table>
+    </div>
+  </div>`;
+}
+
+async function runBenchmark() {
+  let cases;
+  try { cases = readCases(); } catch (e) { benchMsg(e.message); return; }
+  if (!cases.length) { benchMsg('nessun caso: incolla o importa i casi e riprova.'); return; }
+  const doStability = $('bench_stability').checked;
+  const rotations = Number($('rotations').value) || 4;
+  const btn = $('bench_run');
+  btn.disabled = true;
+  const rows = [];
+  try {
+    for (let i = 0; i < cases.length; i++) {
+      const c = cases[i];
+      benchMsg(`caso ${i + 1}/${cases.length}\u2026`);
+      const body = { ...settings(), ...(c.settings || {}), problem: c.problem, solutions: c.solutions };
+      let res = null, err = null, stab = null;
+      try { res = await postJson('/api/solve', body); } catch (e) { err = e.message; }
+      if (!err && doStability) {
+        try { stab = await postJson('/api/stability', { ...body, strategy: 'simple', rotations }); }
+        catch (e) { /* l'accordo e' opzionale per il singolo caso */ }
+      }
+      const first = res && res.results && res.results[0];
+      const expected = res ? expectedKey(c, res) : null;
+      rows.push({
+        name: c.name || ('caso ' + (i + 1)),
+        expected,
+        choice: first ? first.choice : null,
+        correct: !!(first && expected != null && first.choice === expected),
+        answer_confidence: first ? first.answer_confidence : null,
+        abstained: !!(first && first.abstention === 'abstained'),
+        agreement: stab ? stab.agreement : null,
+        error: err,
+      });
+    }
+  } finally {
+    btn.disabled = false;
+  }
+  const metrics = benchMetrics(rows);
+  renderBench(rows, metrics);
+  benchMsg('benchmark completato.');
+}
+
+function benchCsv() {
+  const box = $('bench');
+  if (!box._rows) { benchMsg('esegui prima il benchmark.'); return; }
+  const header = ['name', 'expected', 'choice', 'correct', 'answer_confidence', 'abstained', 'agreement', 'error'];
+  const lines = [header.join(',')];
+  for (const r of box._rows) {
+    lines.push(header.map((h) => {
+      const v = r[h];
+      if (v == null) return '';
+      const s = String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(','));
+  }
+  downloadFile(`laya-benchmark-${fileStamp()}.csv`, lines.join('\n'), 'text/csv');
+}
+function benchJson() {
+  const box = $('bench');
+  if (!box._rows) { benchMsg('esegui prima il benchmark.'); return; }
+  downloadFile(`laya-benchmark-${fileStamp()}.json`, JSON.stringify({ metrics: box._metrics, rows: box._rows }, null, 2), 'application/json');
+}
+$('bench_run').addEventListener('click', runBenchmark);
+$('bench_csv').addEventListener('click', benchCsv);
+$('bench_json').addEventListener('click', benchJson);
 
 $('go').addEventListener('click', run);
 $('warm').addEventListener('click', async () => {
@@ -691,10 +1431,16 @@ if (API_KEY) $('apikey_hint').textContent = 'chiave attiva in localStorage';
 // Il ripristino va prima di tutto il resto: poi il device di default si sceglie solo se non
 // c'era nulla di salvato (altrimenti un reload ti cambierebbe la scelta sotto le dita).
 const restored = restore();
-if (!restored) $('instructions').value = INSTRUCTIONS_EN;
+if (!restored) $('instructions').value = INSTRUCTION_PRESETS[0] ? INSTRUCTION_PRESETS[0].text : INSTRUCTIONS_EN;
 syncVisibility();
+syncPresetFromText();
 refreshCounter();
 restoreResult();
+syncExport();
+// I casi stanno in uno store separato: sopravvivono a "Pulisci", sono casi di test riusabili.
+const savedCases = readStore(CASES_KEY);
+if (Array.isArray(savedCases)) $('cases').value = JSON.stringify(savedCases, null, 2);
+updateCaseCount();
 
 refreshStatus().then((s) => {
   const cuda = !!(s && s.torch && s.torch.cuda_available);

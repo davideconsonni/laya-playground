@@ -82,6 +82,8 @@ uv run python src/warmup.py --device both --full
 ```
 
 Prints device, dtype, cold and warm latency, the tournament on 30 solutions and the stability test.
+`--determinism` (implied by `--full`) runs the same input twice and checks the output is identical,
+including the seeded rotation orders.
 
 ## Using the UI
 
@@ -98,13 +100,49 @@ Prints device, dtype, cold and warm latency, the tournament on 30 solutions and 
    - `Lungo` ("long") &mdash; for problems longer than the context window: reads the whole
      document in windows instead of truncating.
 5. Tick **Testa anche la stabilita'** ("also test stability") to repeat the question with the
-   option order rotated `k` times (in a single forward pass) and see whether the choice changes.
-6. **Decidi** ("decide") (or Ctrl+Enter).
+   option order permuted `k` times (in a single forward pass) and see whether the choice changes.
+   The permutations are **random and seeded** (reproducible run to run), up to 32 (and never more
+   than the distinct permutations that exist); the result shows the **distribution** of the
+   choices across the rotations, not only the average.
+6. **Decidi** ("decide") (or Ctrl+Enter). If the reliability flag is available the result also
+   carries an **affidabilita'** card (see below).
+7. **Esporta per LLM** ("export for LLM") &mdash; enabled once a result exists (just run, or
+   restored from the previous session). It opens a window with a single self-contained Markdown
+   document covering **everything the interface shows**: environment, the input as it was sent,
+   the per-device result with every field (not just the rendered ones), the stability test
+   including the per-rotation probabilities and the distribution, the reliability flag, the
+   interface notes/explanations and the raw JSON of both responses. Copy it or download it as
+   `.md` (`.json` for the raw payloads) and paste it into another LLM for a third opinion.
 
 In the **Avanzate** ("advanced") section: token budgets, `min_confidence` as an abstention
-threshold, forced language, the question instructions (editable to run an A/B between English and
-Italian instructions), and two extra questions &mdash; `score` ("how good is the best solution?")
-and `noul` ("is there a solution that solves it completely?").
+threshold (with a **suggested 0.5** and a one-click fill; when it is left empty the cards still
+flag an answer below the suggested threshold as "astensione non attiva"), forced language, an
+**instruction preset menu** (the default *eliminates the problem*, the previous wording and three
+variants &mdash; correctness, low risk, speed &mdash; editable to run an A/B), a **multilingual /
+english checkpoint comparison** (the english run uses an optional English version of the problem,
+so the language effect is isolated) and two extra questions &mdash; `score` ("how good is the best
+solution?") and `noul` ("is there a solution that solves it completely?").
+
+### Reliability flag
+
+The **affidabilita'** card is a heuristic, not a probability: it combines the `answer_confidence`,
+the agreement between the stability rotations (only if the stability test ran) and the coherence
+with `score`/`noul` (only if those questions are on). It returns `affidabile`, `da verificare` or
+`poco affidabile` with the list of reasons that fired, so you can disagree with it. Example: a
+`score` of `optimal` together with a low rotation agreement is reported as
+"confidenza non affidabile".
+
+### Casi e benchmark
+
+The **Casi &amp; benchmark** section runs a set of repeatable cases and reports the accuracy. A case
+is `{ "problem", "solutions": [...], "expected" }`, where `expected` is the index (0-based) or the
+text of the expected solution (`null`/absent = no expected answer); an optional
+`"settings": { ... }` overrides the form for that case. Paste the JSON or import/export a file;
+**Usa caso corrente** appends the current form as a case. **Esegui benchmark** runs every case
+(optionally with stability) and shows per-case results plus accuracy, mean confidence on the
+correct and on the wrong answers, abstention rate and mean agreement. Export the run as CSV or
+JSON. The cases live in their own `localStorage` key (`layaPlayground.cases.v1`) and survive
+**Pulisci**.
 
 ### Browser persistence
 
@@ -132,7 +170,8 @@ to trust that single answer.
 |---|---|
 | `GET /api/status` | python, torch, CUDA device, VRAM, resident checkpoints, warmup state |
 | `POST /api/solve` | `{problem, solutions[], device, checkpoint, strategy, ...}` -> choice and probabilities |
-| `POST /api/stability` | as above + `rotations` -> choice per rotation and averaged probabilities |
+| `POST /api/stability` | as above + `rotations` -> choice per rotation, averaged probabilities, distribution |
+| `POST /api/assess` | `{solve, stability?}` -> heuristic reliability flag per device (no model needed) |
 | `POST /api/warmup` | `{device}` -> starts download/preload in the background |
 | `POST /api/unload` | frees the weights from memory |
 
