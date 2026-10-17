@@ -1,17 +1,17 @@
-# Playground Laya in un container.
+# Laya playground in a container.
 #
 #   CPU (default):
 #     docker build -t laya-playground .
 #
-#   GPU (serve il driver NVIDIA sull'host e, per Docker, nvidia-container-toolkit):
+#   GPU (needs the NVIDIA driver on the host and, for Docker, nvidia-container-toolkit):
 #     docker build -t laya-playground:cuda --build-arg TORCH_BACKEND=cuda .
 #
-#   Con i pesi gia' dentro l'immagine (utile dove non c'e' un volume persistente):
+#   With the weights baked into the image (useful where there is no persistent volume):
 #     docker build -t laya-playground:baked --build-arg BAKE=1 .
 #
-# I due backend differiscono solo per l'indice da cui arriva PyTorch: la wheel *Linux* cu130
-# porta con se' il runtime CUDA (dipendenze `nvidia-*`), quindi non serve l'immagine base
-# `nvidia/cuda` a build time -- serve solo a runtime, se vuoi la GPU.
+# The two backends differ only in the index PyTorch comes from: the *Linux* cu130 wheel brings
+# the CUDA runtime with it (the `nvidia-*` dependencies), so the base `nvidia/cuda` image is not
+# needed at build time -- it is only needed at runtime, if you want the GPU.
 
 ARG PYTHON_VERSION=3.12
 FROM python:${PYTHON_VERSION}-slim
@@ -24,17 +24,17 @@ ARG BAKE=0
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HUB_DISABLE_TELEMETRY=1 \
-    # Nel container il playground ascolta su tutte le interfacce e, senza GPU, va in CPU.
+    # In the container the playground listens on all interfaces and, with no GPU, runs on CPU.
     LAYA_HOST=0.0.0.0 \
     LAYA_PORT=8000 \
     LAYA_DEVICE=cpu \
-    # I pesi in /models: e' il percorso da montare come volume.
+    # The weights go in /models: that is the path to mount as a volume.
     LAYA_HF_CACHE=/models
-    # LAYA_THREADS non e' impostata di proposito: il server ricava il numero di thread dal
-    # limite di CPU del container (cgroup), altrimenti dai core dell'host con tetto a 16.
-    # Impostala solo per forzare un valore: LAYA_THREADS=8
+    # LAYA_THREADS is deliberately not set: the server derives the number of threads from the
+    # container CPU limit (cgroup), otherwise from the host cores with a cap at 16.
+    # Set it only to force a value: LAYA_THREADS=8
 
-# uv dal binario ufficiale: coerente con il resto del progetto e piu' rapido di pip.
+# uv from the official binary: consistent with the rest of the project and faster than pip.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 WORKDIR /app
@@ -43,9 +43,9 @@ RUN useradd --create-home --uid 10001 laya \
     && mkdir -p /models \
     && chown laya:laya /models
 
-# PyTorch per primo, dall'indice giusto; poi `laya`, che lo trova gia' soddisfatto e non lo
-# reinstalla. Nota: qui NON si usa `uv sync`, perche' pyproject.toml fissa l'indice cu130,
-# che e' quello sbagliato per l'immagine CPU.
+# PyTorch first, from the right index; then `laya`, which finds it already satisfied and does not
+# reinstall it. Note: `uv sync` is NOT used here, because pyproject.toml pins the cu130 index,
+# which is the wrong one for the CPU image.
 RUN set -eux; \
     if [ "$TORCH_BACKEND" = "cuda" ]; then index=cu130; else index=cpu; fi; \
     uv pip install --system --no-cache \
@@ -54,8 +54,8 @@ RUN set -eux; \
 
 COPY src/ ./src/
 
-# Opzionale: scarica i pesi in build (immagine +~1.7 GB, ma nessun download al primo avvio).
-# Senza un volume persistente e' quasi sempre la scelta giusta per un deploy.
+# Optional: download the weights at build time (image +~1.7 GB, but no download on first start).
+# Without a persistent volume this is almost always the right choice for a deploy.
 RUN if [ "$BAKE" = "1" ]; then \
         python src/warmup.py --device cpu --checkpoint multilingual \
         && chown -R laya:laya /models; \
@@ -68,6 +68,6 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
     CMD python -c "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=4).status == 200 else 1)"
 
-# `--warm` precarica in background: senza, la prima richiesta paga il load.
-# Un solo processo: ogni worker terrebbe una copia dei pesi in memoria.
+# `--warm` preloads in the background: without it, the first request pays the load.
+# A single process: every worker would keep a copy of the weights in memory.
 CMD ["python", "src/server.py", "--warm"]

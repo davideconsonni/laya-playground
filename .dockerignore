@@ -1,14 +1,16 @@
-# Il contesto di build non deve includere l'ambiente locale ne' i pesi: sono GB.
+# The build context must not include the local environment nor the weights: they are GB.
 .venv/
 .hf-cache/
 __pycache__/
 *.pyc
 
-# Segreti: il token entra a runtime con `env_file`/`--env-file`, mai nell'immagine.
+# Secrets: the token enters at runtime with `env_file`/`--env-file`, never into the image.
 .env
 
-# Roba da Windows e file che l'immagine non usa.
+# Windows stuff, launchers and files the image does not use.
 run.ps1
+run.bat
+run.sh
 .python-version
 uv.lock
 *.md

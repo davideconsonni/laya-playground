@@ -1,20 +1,20 @@
-"""Motore del playground Laya.
+"""Laya playground engine.
 
-Un solo punto di verita' per tre cose:
+Single source of truth for three things:
 
-* il **pool di device** -- un ``Router`` per device (``cpu`` / ``cuda`` / ...), costruito al
-  primo uso e poi riutilizzato, cosi' il toggle CPU/GPU nella UI non ripaga il load ad ogni
-  richiesta;
-* la **costruzione della domanda** -- il problema e' lo *state*, ogni soluzione candidata e'
-  una opzione di una domanda ``choice`` con chiavi neutre (``s00``, ``s01``, ...). Le chiavi
-  sono opache di proposito: i checkpoint seguono letteralmente etichette tipo ``true``/``false``
-  invece del testo dell'opzione;
-* le **modalita' di test** -- ``simple`` (una sola domanda), ``tournament`` (eliminazione a
-  gruppi, regge fino a 256 soluzioni), ``long`` (problema piu' lungo della finestra) e
-  ``stability`` (k rotazioni dell'ordine delle opzioni, mediate insieme).
+* the **device pool** -- one ``Router`` per device (``cpu`` / ``cuda`` / ...), built on first
+  use and reused afterwards, so the CPU/GPU toggle in the UI does not pay the load on every
+  request;
+* the **question construction** -- the problem is the *state*, each candidate solution is an
+  option of a ``choice`` question with neutral keys (``s00``, ``s01``, ...). The keys are
+  opaque on purpose: the checkpoints follow labels like ``true``/``false`` literally instead
+  of the option text;
+* the **test modes** -- ``simple`` (a single question), ``tournament`` (group elimination,
+  handles up to 256 solutions), ``long`` (problem longer than the window) and ``stability``
+  (k rotations of the option order, averaged together).
 
-Nessun import di ``torch`` o ``laya`` a livello di modulo: entrambi sono pesanti e questo file
-viene importato dal server all'avvio.
+No module-level import of ``torch`` or ``laya``: both are heavy and this file is imported by
+the server at startup.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 # --------------------------------------------------------------------------------------
-# Percorsi e configurazione
+# Paths and configuration
 # --------------------------------------------------------------------------------------
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -36,7 +36,7 @@ STATIC_DIR = SRC_DIR / "static"
 
 
 def _load_dotenv(path: Path) -> None:
-    """Carica un ``.env`` minimale (KEY=VALUE) senza dipendere da python-dotenv."""
+    """Load a minimal ``.env`` (KEY=VALUE) without depending on python-dotenv."""
     if not path.is_file():
         return
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -52,16 +52,16 @@ def _load_dotenv(path: Path) -> None:
 
 _load_dotenv(ROOT / ".env")
 
-# I pesi finiscono dentro il progetto, non nella cache utente: cosi' si cancella tutto
-# insieme. Va impostato prima che qualsiasi cosa importi huggingface_hub.
+# The weights land inside the project, not in the user cache: that way everything can be
+# deleted together. This must be set before anything imports huggingface_hub.
 _HF_CACHE = os.environ.get("LAYA_HF_CACHE", ".hf-cache")
 HF_CACHE_DIR = (ROOT / _HF_CACHE).resolve() if not Path(_HF_CACHE).is_absolute() else Path(_HF_CACHE)
 os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
 os.environ.setdefault("HF_HUB_CACHE", str(HF_CACHE_DIR / "hub"))
 
-# Il checkpoint non e' un LLM: non "spiega", sceglie. Le istruzioni sono in inglese di
-# default perche' e' la lingua con piu' dati di training; i testi delle soluzioni restano
-# nella lingua dell'utente. Dalla UI sono modificabili per fare A/B.
+# The checkpoint is not an LLM: it does not "explain", it chooses. The instructions default to
+# English because that is the language with the most training data; the solution texts stay in
+# the user's language. They can be edited from the UI to run an A/B.
 INSTRUCTIONS_EN = (
     "Which candidate solution best solves the problem described in the state? "
     "Pick the single most effective and practically applicable one."
@@ -80,11 +80,11 @@ COMPLETE_CRITERIA = {
     "true": "at least one candidate solution fully solves the problem",
 }
 
-# Sotto questa soglia una sola domanda `choice` basta; sopra conviene il tournament.
+# Below this threshold a single `choice` question is enough; above it the tournament pays off.
 AUTO_TOURNAMENT_AT = 20
-# Dimensione dei gruppi del tournament (il default della libreria e' 16).
+# Tournament group size (the library default is 16).
 DEFAULT_GROUP_SIZE = 16
-# Oltre questo numero la modalita' stabilita' costa piu' di quanto dica.
+# Beyond this number the stability mode costs more than it tells you.
 MAX_ROTATIONS = 8
 
 STRATEGIES = ("auto", "simple", "tournament", "long")
@@ -96,7 +96,7 @@ def hf_token() -> Optional[str]:
 
 
 def clean_solutions(raw: Iterable[str]) -> List[str]:
-    """Una soluzione per riga: scarta righe vuote, tiene l'ordine, rimuove i duplicati."""
+    """One solution per line: drop empty lines, keep the order, remove duplicates."""
     out: List[str] = []
     seen = set()
     for item in raw:
@@ -109,7 +109,7 @@ def clean_solutions(raw: Iterable[str]) -> List[str]:
 
 
 # --------------------------------------------------------------------------------------
-# Pool di device
+# Device pool
 # --------------------------------------------------------------------------------------
 
 _DEVICE_ALIASES = {
@@ -129,11 +129,11 @@ def normalise_device(device: Optional[str]) -> str:
 
 
 class DevicePool:
-    """Un ``Router`` per device, costruito al primo uso e riusato.
+    """One ``Router`` per device, built on first use and reused afterwards.
 
-    ``Router(device=...)`` decide il backend una volta per oggetto, quindi il toggle CPU/GPU
-    richiede due istanze. Tenerle entrambe vive e' cio' che rende istantaneo il passaggio e
-    che rende possibile il confronto CPU-vs-GPU nella UI.
+    ``Router(device=...)`` decides the backend once per object, so the CPU/GPU toggle needs
+    two instances. Keeping both alive is what makes the switch instant and what makes the
+    CPU-vs-GPU comparison in the UI possible.
     """
 
     def __init__(self) -> None:
@@ -143,7 +143,7 @@ class DevicePool:
         self._init_seconds: Dict[str, float] = {}
         self._warm: Dict[str, Dict[str, Any]] = {}
 
-    # -- stato -------------------------------------------------------------------------
+    # -- state -------------------------------------------------------------------------
 
     def warm_state(self) -> Dict[str, Dict[str, Any]]:
         with self._lock:
@@ -151,11 +151,11 @@ class DevicePool:
 
     def loaded(self) -> Dict[str, List[str]]:
         with self._lock:
-            # `Router.loaded` e' una property, non un metodo.
+            # `Router.loaded` is a property, not a method.
             return {device: list(router.loaded) for device, router in self._routers.items()}
 
     def router_init_seconds(self) -> Dict[str, float]:
-        """Quanto e' costata la *costruzione* del Router (che e' lazy: i pesi no)."""
+        """What the *construction* of the Router cost (which is lazy: the weights are not)."""
         with self._lock:
             return dict(self._init_seconds)
 
@@ -163,10 +163,10 @@ class DevicePool:
         with self._lock:
             return dict(self._errors)
 
-    # -- costruzione -------------------------------------------------------------------
+    # -- construction ------------------------------------------------------------------
 
     def get(self, device: Optional[str]) -> Any:
-        """Restituisce il Router per il device richiesto, costruendolo se serve."""
+        """Return the Router for the requested device, building it if needed."""
         key = normalise_device(device)
         with self._lock:
             router = self._routers.get(key)
@@ -176,8 +176,8 @@ class DevicePool:
             if failure is not None:
                 raise RuntimeError(failure)
 
-        # Costruito fuori dal lock: il build scarica i pesi e puo' durare minuti, e non
-        # vogliamo bloccare il toggle dell'altro device nel frattempo.
+        # Built outside the lock: the build downloads the weights and can take minutes, and
+        # we do not want to block the toggle of the other device in the meantime.
         try:
             preimport()
             from laya import Router
@@ -192,7 +192,7 @@ class DevicePool:
             started = time.perf_counter()
             router = Router(**kwargs)
             seconds = time.perf_counter() - started
-        except Exception as exc:  # pragma: no cover - dipende dall'ambiente
+        except Exception as exc:  # pragma: no cover - depends on the environment
             message = f"device '{key}': non riesco a costruire il Router ({type(exc).__name__}: {exc})"
             with self._lock:
                 self._errors[key] = message
@@ -201,23 +201,24 @@ class DevicePool:
         with self._lock:
             self._routers[key] = router
             self._init_seconds[key] = seconds
-            # Non calpestare un warmup in corso: chi lo ha avviato scrive "ready" a fine
-            # preload, e sovrascriverlo qui farebbe credere che i pesi siano gia' residenti.
+            # Do not clobber a warmup in progress: whoever started it writes "ready" at the
+            # end of the preload, and overwriting it here would make it look like the weights
+            # are already resident.
             if self._warm.get(key, {}).get("state") != "loading":
                 self._warm[key] = {"state": "ready", "seconds": round(seconds, 3), "detail": None}
         return router
 
-    # -- preload in background ---------------------------------------------------------
+    # -- background preload --------------------------------------------------------------
 
     def start_warmup(self, device: Optional[str], checkpoints: Optional[List[str]] = None) -> Dict[str, Any]:
-        """Avvia il load/preload in un thread e torna subito.
+        """Start the load/preload in a thread and return immediately.
 
-        Il primo ``predict`` scarica un checkpoint dal Hub: puo' durare minuti, e la UI deve
-        poterlo mostrare invece di sembrare bloccata.
+        The first ``predict`` downloads a checkpoint from the Hub: it can take minutes, and the
+        UI must be able to show it instead of looking stuck.
 
-        Il default e' il solo ``multilingual``: e' dove il routing fa cadere un testo latino
-        non inglese, e precaricare anche ``english`` scaricherebbe ~1.7 GB in piu' che nessuno
-        userebbe in un caso come questo (``english`` resta comunque a load lazy al primo uso).
+        The default is only ``multilingual``: that is where routing drops a non-English Latin
+        text, and preloading ``english`` too would download ~1.7 GB more that nobody would use
+        in a case like this (``english`` is still loaded lazily on first use).
         """
         key = normalise_device(device)
         with self._lock:
@@ -239,7 +240,7 @@ class DevicePool:
                         "seconds": elapsed,
                         "detail": "checkpoint residenti: " + ", ".join(router.loaded),
                     }
-            except Exception as exc:  # pragma: no cover - dipende dall'ambiente
+            except Exception as exc:  # pragma: no cover - depends on the environment
                 with self._lock:
                     self._warm[key] = {
                         "state": "error",
@@ -251,7 +252,7 @@ class DevicePool:
         return {"started": True, "state": "loading"}
 
     def unload(self, device: Optional[str] = None) -> List[str]:
-        """Libera la memoria dei checkpoint (il Router resta, i pesi no)."""
+        """Free the memory of the checkpoints (the Router stays, the weights do not)."""
         key = normalise_device(device) if device else None
         freed: List[str] = []
         with self._lock:
@@ -259,7 +260,7 @@ class DevicePool:
         for name in targets:
             with self._lock:
                 router = self._routers.get(name)
-                # `Router.unload()` libera ma non ritorna nulla: i nomi li leggiamo prima.
+                # `Router.unload()` frees but returns nothing: we read the names beforehand.
                 resident = list(router.loaded) if router is not None else []
             if router is not None:
                 router.unload()
@@ -269,21 +270,21 @@ class DevicePool:
 
 _POOL = DevicePool()
 
-# transformers 5.x risolve i nomi pigramente: se due thread avviano l'import nello stesso
-# momento, uno puo' vedere il modulo a meta' e fallire con
-# `cannot import name 'AutoTokenizer' from 'transformers'`. Serializzare il primo import
-# (dopo, `import transformers` e' solo un lookup in sys.modules) elimina la corsa.
+# transformers 5.x resolves names lazily: if two threads start the import at the same moment,
+# one can see the module half-built and fail with
+# `cannot import name 'AutoTokenizer' from 'transformers'`. Serialising the first import
+# (after that, `import transformers` is just a sys.modules lookup) removes the race.
 _IMPORT_LOCK = threading.RLock()
 _preimported: Optional[str] = None
 
 
 def _auto_threads() -> int:
-    """Thread da usare per l'inferenza su CPU.
+    """Number of threads to use for CPU inference.
 
-    In un container torch vede i core dell'**host**, non il limite dato a Docker: su una
-    macchina grossa un container da 2 vCPU finirebbe con 64 thread e diventerebbe lentissimo
-    per over-subscription. Quindi: si rispetta il limite di CPU del cgroup se c'e', altrimenti
-    si prende il numero di core, con un tetto a 16 (il massimo misurato nel README di laya).
+    In a container torch sees the **host** cores, not the limit given to Docker: on a big
+    machine a 2-vCPU container would end up with 64 threads and become very slow because of
+    over-subscription. So: respect the cgroup CPU limit if there is one, otherwise take the
+    number of cores, capped at 16 (the maximum measured in the laya README).
     """
     try:  # cgroup v2
         quota, period = (Path("/sys/fs/cgroup/cpu.max").read_text().split() + ["100000"])[:2]
@@ -302,7 +303,7 @@ def _auto_threads() -> int:
 
 
 def preimport() -> Optional[str]:
-    """Importa una volta sola, sotto lock, torch/transformers/laya e i nomi lazy di transformers."""
+    """Import once, under lock, torch/transformers/laya and the lazy names of transformers."""
     global _preimported
     with _IMPORT_LOCK:
         if _preimported is not None:
@@ -313,9 +314,10 @@ def preimport() -> Optional[str]:
         from laya import Agent, Router  # noqa: F401
 
         for name in ("AutoTokenizer", "AutoConfig", "AutoModel"):
-            getattr(transformers, name, None)  # forza la lazy module a risolverli ora
+            getattr(transformers, name, None)  # force the lazy module to resolve them now
 
-        # LAYA_THREADS vince; senza, si calcola dal cgroup/numero di core (vedi _auto_threads).
+        # LAYA_THREADS wins; without it, it is computed from the cgroup/core count (see
+        # _auto_threads).
         threads = (os.environ.get("LAYA_THREADS") or "").strip()
         count = int(threads) if threads.isdigit() and int(threads) > 0 else _auto_threads()
         torch.set_num_threads(count)
@@ -332,7 +334,7 @@ def pool() -> DevicePool:
 
 
 # --------------------------------------------------------------------------------------
-# Domanda e budget
+# Question and budget
 # --------------------------------------------------------------------------------------
 
 
@@ -343,7 +345,7 @@ def build_questions(
     with_quality: bool = False,
     with_complete: bool = False,
 ) -> Dict[str, Any]:
-    """Costruisce il dizionario di domande tipizzate per una lista di soluzioni."""
+    """Build the dictionary of typed questions for a list of solutions."""
     keys = [f"s{i:02d}" for i in range(len(solutions))]
     criteria = {key: text for key, text in zip(keys, solutions)}
 
@@ -370,11 +372,11 @@ def build_questions(
 
 
 def suggest_budgets(n_options: int, checkpoint: str = "auto") -> Dict[str, int]:
-    """Budget di token sensati per un problema con ``n_options`` soluzioni.
+    """Sensible token budgets for a problem with ``n_options`` solutions.
 
-    In Laya le opzioni condividono un budget (``head_max_len``) e ogni opzione sotto ~4 token
-    diventa indistinguibile dalle altre: oltre ~20 opzioni i default (192/256) troncano le
-    descrizioni. Qui si allarga il budget in proporzione, con un tetto.
+    In Laya the options share a budget (``head_max_len``) and each option below ~4 tokens
+    becomes indistinguishable from the others: beyond ~20 options the defaults (192/256) truncate
+    the descriptions. Here the budget is widened proportionally, with a cap.
     """
     base_head, base_max = (192, 512) if checkpoint == "english" else (256, 1024)
     head = min(max(base_head, 16 + 24 * max(1, n_options)), 4096)
@@ -383,12 +385,12 @@ def suggest_budgets(n_options: int, checkpoint: str = "auto") -> Dict[str, int]:
 
 
 # --------------------------------------------------------------------------------------
-# Inferenza
+# Inference
 # --------------------------------------------------------------------------------------
 
 
 def _quality_criteria() -> Dict[str, str]:
-    """Mappa dei livelli `score` valida sia che le probabilita' siano per indice sia per testo."""
+    """Map of the `score` levels, valid whether the probabilities are by index or by text."""
     mapping = {str(index): level for index, level in enumerate(QUALITY_LEVELS)}
     mapping.update({level: level for level in QUALITY_LEVELS})
     return mapping
@@ -397,7 +399,7 @@ def _quality_criteria() -> Dict[str, str]:
 def _answer_view(
     answer: Dict[str, Any], criteria: Dict[str, str], *, compute_eliminated: bool = True
 ) -> Dict[str, Any]:
-    """Normalizza la risposta di una domanda in qualcosa che la UI legge facile."""
+    """Normalise the answer of a question into something the UI reads easily."""
     probabilities = answer.get("probabilities") or {}
     present = [key for key in criteria if key in probabilities] or list(probabilities)
     ranked = sorted(
@@ -426,7 +428,7 @@ def _answer_view(
 
 
 def _agent_facts(router: Any, routing: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """Device e dtype reali del checkpoint che ha risposto."""
+    """Real device and dtype of the checkpoint that answered."""
     facts: Dict[str, Any] = {}
     name = (routing or {}).get("model")
     try:
@@ -442,7 +444,7 @@ def _agent_facts(router: Any, routing: Optional[Dict[str, Any]]) -> Dict[str, An
 
 
 def _truncation_note(problem: str, max_len: int, head_max_len: int) -> Optional[str]:
-    """Avviso approssimativo quando il problema rischia di essere troncato."""
+    """Approximate warning when the problem risks being truncated."""
     room = max_len - head_max_len - 1
     approx_tokens = max(1, len(problem) // 4)
     if approx_tokens > room:
@@ -469,7 +471,7 @@ def solve(
     with_complete: bool = False,
     lang: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Sceglie la soluzione migliore fra quelle date, su un solo device."""
+    """Choose the best solution among the given ones, on a single device."""
     problem = (problem or "").strip()
     solutions = clean_solutions(solutions)
     if not problem:
@@ -496,8 +498,8 @@ def solve(
     router = pool().get(device)
     state = {"problem": problem}
 
-    # `predict_long` non accetta i budget (`window` li sostituisce) ne' `min_confidence`:
-    # i kwargs comuni e quelli di budget restano separati.
+    # `predict_long` accepts neither the budgets (`window` replaces them) nor `min_confidence`:
+    # the common kwargs and the budget kwargs stay separate.
     common: Dict[str, Any] = {}
     if lang:
         common["lang"] = lang
@@ -602,12 +604,12 @@ def stability(
     instructions: Optional[str] = None,
     lang: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Testa la stabilita' della scelta ruotando l'ordine delle opzioni.
+    """Test the stability of the choice by rotating the option order.
 
-    Laya ha una position bias documentata: la stessa opzione in slot diversi riceve logit
-    diversi. Qui la stessa domanda viene posta ``k`` volte con ``option_order`` ruotato, tutte
-    in **un solo forward pass**, e si riporta sia la scelta mediata sia quante volte la scelta
-    e' cambiata. E' il test che dice se fidarsi di quella decisione.
+    Laya has a documented position bias: the same option in different slots receives different
+    logits. Here the same question is asked ``k`` times with a rotated ``option_order``, all in
+    **a single forward pass**, and it reports both the mediated choice and how many times the
+    choice changed. It is the test that tells you whether to trust that decision.
     """
     problem = (problem or "").strip()
     solutions = clean_solutions(solutions)
@@ -707,7 +709,7 @@ def stability(
 
 
 # --------------------------------------------------------------------------------------
-# Stato dell'ambiente
+# Environment state
 # --------------------------------------------------------------------------------------
 
 
@@ -741,7 +743,7 @@ def _torch_info() -> Dict[str, Any]:
             info["vram_total_mb"] = int(props.total_memory / (1024 * 1024))
             free, _total = torch.cuda.mem_get_info(index)
             info["vram_free_mb"] = int(free / (1024 * 1024))
-    except Exception as exc:  # pragma: no cover - dipende dall'ambiente
+    except Exception as exc:  # pragma: no cover - depends on the environment
         info["error"] = f"{type(exc).__name__}: {exc}"
 
     _TORCH_INFO = info
@@ -749,7 +751,7 @@ def _torch_info() -> Dict[str, Any]:
 
 
 def status() -> Dict[str, Any]:
-    # La VRAM libera cambia durante la sessione: il resto e' statico e resta in cache.
+    # Free VRAM changes during the session: the rest is static and stays cached.
     torch_info = dict(_torch_info())
     if torch_info.get("cuda_available"):
         try:
@@ -766,8 +768,8 @@ def status() -> Dict[str, Any]:
     except Exception as exc:  # pragma: no cover
         laya_version = f"non importabile ({type(exc).__name__})"
     try:
-        # Sotto lo stesso lock del preimport: senza, questo `import transformers` puo'
-        # correre contro il primo import di un thread di warmup.
+        # Under the same lock as the preimport: without it, this `import transformers` can
+        # race against the first import of a warmup thread.
         with _IMPORT_LOCK:
             import transformers
 

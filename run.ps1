@@ -1,6 +1,6 @@
-# Avvia il playground Laya.
-#   .\run.ps1                    -> GPU (cuda), porta 8000
-#   .\run.ps1 --device cpu       -> forza la CPU
+# Start the Laya playground.
+#   .\run.ps1                    -> GPU (cuda), port 8000
+#   .\run.ps1 --device cpu       -> force CPU
 #   .\run.ps1 --port 8080
 param(
     [string]$Device = "",
@@ -16,5 +16,5 @@ $args = @("run", "python", "src/server.py", "--warm")
 if ($Device) { $args += @("--device", $Device) }
 if ($Port)   { $args += @("--port", $Port) }
 
-Write-Host "Avvio: uv $($args -join ' ')" -ForegroundColor Cyan
+Write-Host "Starting: uv $($args -join ' ')" -ForegroundColor Cyan
 uv @args

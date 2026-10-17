@@ -1,10 +1,10 @@
-# ambiente
+# environment
 .venv/
 
-# pesi dei checkpoint (grossi, ricreabili con src/warmup.py)
+# checkpoint weights (large, recreatable with src/warmup.py)
 .hf-cache/
 
-# segreti
+# secrets
 .env
 
 # python

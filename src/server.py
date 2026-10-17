@@ -1,13 +1,14 @@
-"""Server FastAPI del playground Laya.
+"""FastAPI server for the Laya playground.
 
-Serve la UI (``src/static/index.html``) e tre endpoint:
+Serves the UI (``src/static/index.html``) and these endpoints:
 
-* ``GET  /api/status``    -- ambiente, device disponibili, checkpoint residenti, warmup;
-* ``POST /api/solve``     -- il problema + le soluzioni -> scelta, probabilita', latenza;
-* ``POST /api/stability`` -- la stessa decisione sotto k rotazioni dell'ordine delle opzioni;
-* ``POST /api/warmup``    -- avvia in background il download/load dei checkpoint.
+* ``GET  /api/status``    -- environment, available devices, resident checkpoints, warmup;
+* ``POST /api/solve``     -- the problem + the solutions -> choice, probabilities, latency;
+* ``POST /api/stability`` -- the same decision under k rotations of the option order;
+* ``POST /api/warmup``    -- starts the download/load of the checkpoints in the background.
 
-Avvio:  ``uv run python src/server.py``  (oppure ``.\run.ps1``)
+Startup:  ``uv run python src/server.py``  (or one of the launchers: ``run.sh``, ``run.bat``,
+``run.ps1``)
 """
 
 from __future__ import annotations
@@ -31,18 +32,18 @@ app = FastAPI(title="Laya playground", version="0.1.0")
 
 
 def api_key() -> str:
-    """Chiave che protegge le rotte /api/*. Vuota (default) = nessuna protezione."""
+    """Key that protects the /api/* routes. Empty (default) = no protection."""
     return (os.environ.get("LAYA_API_KEY") or "").strip()
 
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    """Se `LAYA_API_KEY` e' impostata, tutto /api/* la richiede.
+    """If `LAYA_API_KEY` is set, everything under /api/* requires it.
 
-    Serve quando il playground e' esposto su internet: senza, chiunque puo' consumare la tua
-    CPU/GPU. `/` (la UI) e `/health` restano aperti: la prima e' solo una pagina statica, il
-    secondo lo interrogano le piattaforme di hosting. Accetta `X-Api-Key`, `Authorization:
-    Bearer` o `?key=`, quest'ultimo perche' la UI possa prenderla dall'URL la prima volta.
+    Needed when the playground is exposed on the internet: without it, anyone can burn your
+    CPU/GPU. `/` (the UI) and `/health` stay open: the first is just a static page, the second
+    is polled by hosting platforms. It accepts `X-Api-Key`, `Authorization: Bearer` or `?key=`,
+    the latter so the UI can pick the key up from the URL the first time.
     """
     key = api_key()
     if not key or not request.url.path.startswith("/api/"):
@@ -62,13 +63,13 @@ async def require_api_key(request: Request, call_next):
 
 
 # --------------------------------------------------------------------------------------
-# Modelli di richiesta
+# Request models
 # --------------------------------------------------------------------------------------
 
 
 class SolveRequest(BaseModel):
-    problem: str = Field(..., description="Il problema da risolvere (lo 'state' del modello).")
-    solutions: List[str] = Field(..., description="Le soluzioni candidate, una per elemento.")
+    problem: str = Field(..., description="The problem to solve (the model's 'state').")
+    solutions: List[str] = Field(..., description="The candidate solutions, one per item.")
     device: str = Field("cuda", description="cuda | cpu | both")
     checkpoint: str = Field("auto", description="auto | english | multilingual | typed-decisions")
     strategy: str = Field("auto", description="auto | simple | tournament | long")
@@ -99,7 +100,7 @@ class WarmupRequest(BaseModel):
     checkpoints: Optional[List[str]] = None
 
 # --------------------------------------------------------------------------------------
-# Endpoint
+# Endpoints
 # --------------------------------------------------------------------------------------
 
 
@@ -114,7 +115,7 @@ def health() -> Dict[str, str]:
 
 
 def _validate(problem: str, solutions: List[str]) -> None:
-    """Input non valido e' un 400, non un 500: non ha senso provarlo su due device."""
+    """Invalid input is a 400, not a 500: no point in trying it on two devices."""
     if not (problem or "").strip():
         raise HTTPException(status_code=400, detail="il problema e' vuoto")
     if len(engine.clean_solutions(solutions)) < 2:
@@ -147,8 +148,8 @@ def api_solve(request: SolveRequest) -> Dict[str, Any]:
                     lang=request.lang,
                 )
             )
-        except Exception as exc:  # una riga di errore per device, senza perdere l'altra
-            log.exception("solve su %s fallito", device)
+        except Exception as exc:  # one error line per device, without losing the other
+            log.exception("solve on %s failed", device)
             errors[device] = str(exc)
 
     if not results:
@@ -173,15 +174,15 @@ def api_stability(request: StabilityRequest) -> Dict[str, Any]:
             lang=request.lang,
         )
     except Exception as exc:
-        log.exception("stability fallita")
+        log.exception("stability failed")
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/api/warmup")
 def api_warmup(request: WarmupRequest) -> Dict[str, Any]:
     targets = ["cuda", "cpu"] if request.device == "both" else [request.device]
-    # Default: solo il checkpoint su cui il routing fa cadere un testo latino non inglese.
-    # Precaricare anche `english` scaricherebbe ~1.7 GB in piu' senza che nessuno lo usi.
+    # Default: only the checkpoint that routing drops a non-English Latin text on. Preloading
+    # `english` too would download ~1.7 GB more that nobody would use.
     names = request.checkpoints or ["multilingual"]
     return {device: engine.pool().start_warmup(device, names) for device in targets}
 
@@ -194,11 +195,11 @@ def api_unload(device: Optional[str] = None) -> Dict[str, Any]:
 
 @app.exception_handler(Exception)
 async def unhandled(_request, exc: Exception) -> JSONResponse:  # pragma: no cover
-    log.exception("errore non gestito")
+    log.exception("unhandled error")
     return JSONResponse(status_code=500, content={"detail": f"{type(exc).__name__}: {exc}"})
 
 
-# La UI sta su "/": va montata per ultima, cosi' gli endpoint /api/* hanno la precedenza.
+# The UI lives at "/": it must be mounted last, so the /api/* endpoints take precedence.
 app.mount("/", StaticFiles(directory=str(engine.STATIC_DIR), html=True), name="ui")
 
 
@@ -206,45 +207,45 @@ app.mount("/", StaticFiles(directory=str(engine.STATIC_DIR), html=True), name="u
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Playground Laya: scelta della soluzione dato un problema")
+    parser = argparse.ArgumentParser(description="Laya playground: choose the solution given a problem")
     parser.add_argument("--host", default=os.environ.get("LAYA_HOST", "127.0.0.1"))
     parser.add_argument("--port", type=int, default=int(os.environ.get("LAYA_PORT", "8000")))
     parser.add_argument("--device", default=os.environ.get("LAYA_DEVICE", "cuda"),
-                        help="cuda | cpu | both | auto (default dal .env)")
+                        help="cuda | cpu | both | auto (default from .env)")
     parser.add_argument("--warm", action="store_true",
-                        help="precarica i checkpoint in background all'avvio")
+                        help="preload the checkpoints in the background at startup")
     parser.add_argument("--warm-model", default=os.environ.get("LAYA_WARM_MODEL", "multilingual"),
-                        help="checkpoint da precaricare con --warm (lista separata da virgole)")
+                        help="checkpoint to preload with --warm (comma-separated list)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-    log.info("UI: http://%s:%s   (device di default: %s)", args.host, args.port, args.device)
+    log.info("UI: http://%s:%s   (default device: %s)", args.host, args.port, args.device)
     if api_key():
-        log.info("LAYA_API_KEY impostata: le rotte /api/* richiedono la chiave")
+        log.info("LAYA_API_KEY is set: the /api/* routes require the key")
     else:
-        log.warning("LAYA_API_KEY non impostata: se esponi il servizio su internet, chiunque puo' usarlo")
+        log.warning("LAYA_API_KEY is not set: if you expose the service on the internet, anyone can use it")
 
-    # Un import solo, nel thread principale, prima che uvicorn accetti richieste: evita la
-    # corsa fra il primo `import transformers` di un thread di warmup e quello di /api/status.
+    # A single import, in the main thread, before uvicorn accepts requests: it avoids the race
+    # between the first `import transformers` of a warmup thread and the one of /api/status.
     torch_info: Dict[str, Any] = {}
     try:
         log.info("preimport: %s", engine.preimport())
         torch_info = engine.status()["torch"]
     except Exception as exc:
-        log.warning("preimport fallito (%s: %s): l'ambiente potrebbe essere incompleto", type(exc).__name__, exc)
+        log.warning("preimport failed (%s: %s): the environment may be incomplete", type(exc).__name__, exc)
 
     if args.warm:
         names = [name.strip() for name in args.warm_model.split(",") if name.strip()]
         for device in (["cuda", "cpu"] if args.device == "both" else [args.device]):
             if device == "cuda" and not torch_info.get("cuda_available"):
-                log.warning("warmup cuda saltato: torch non vede la CUDA (immagine CPU o nessuna GPU)")
+                log.warning("cuda warmup skipped: torch does not see CUDA (CPU image or no GPU)")
                 continue
             log.info("warmup %s (%s): %s", device, ",".join(names), engine.pool().start_warmup(device, names))
 
     import uvicorn
 
-    # Un solo worker: ogni processo tiene i pesi in memoria, quindi N worker = N copie del
-    # modello. Per servire piu' richieste si scala verticalmente, non con --workers.
+    # A single worker: every process keeps the weights in memory, so N workers = N copies of the
+    # model. To serve more requests, scale vertically, not with --workers.
     uvicorn.run(app, host=args.host, port=args.port, log_level="info", workers=1)
 
 
