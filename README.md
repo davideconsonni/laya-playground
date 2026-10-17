@@ -98,7 +98,11 @@ including the seeded rotation orders.
    - `Tournament` &mdash; group elimination with `group_size` (default 16), handles up to ~256
      solutions, at the cost of a few extra forward passes;
    - `Lungo` ("long") &mdash; for problems longer than the context window: reads the whole
-     document in windows instead of truncating.
+     document in windows instead of truncating;
+   - `Per soluzione` ("per solution") &mdash; one short yes/no `choice` per candidate (neutral
+     keys), all in a single forward pass, ranked by P(the candidate eliminates the problem). It is
+     closer to what the base checkpoints are good at than the holistic choice, which is near
+     chance on domain judgments (see the caveat above and *Known limits*).
 5. Tick **Testa anche la stabilita'** ("also test stability") to repeat the question with the
    option order permuted `k` times (in a single forward pass) and see whether the choice changes.
    The permutations are **random and seeded** (reproducible run to run), up to 32 (and never more
@@ -174,6 +178,7 @@ to trust that single answer.
 | `POST /api/assess` | `{solve, stability?}` -> heuristic reliability flag per device (no model needed) |
 | `POST /api/warmup` | `{device}` -> starts download/preload in the background |
 | `POST /api/unload` | frees the weights from memory |
+| `GET /v1/models` | OpenAI-style model list (informational; open, like `/health`) |
 
 Example:
 

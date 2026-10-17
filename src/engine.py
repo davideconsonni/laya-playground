@@ -60,20 +60,20 @@ HF_CACHE_DIR = (ROOT / _HF_CACHE).resolve() if not Path(_HF_CACHE).is_absolute()
 os.environ.setdefault("HF_HOME", str(HF_CACHE_DIR))
 os.environ.setdefault("HF_HUB_CACHE", str(HF_CACHE_DIR / "hub"))
 
-# The checkpoint is not an LLM: it does not "explain", it chooses. The instructions default to
-# English because that is the language with the most training data; the solution texts stay in
-# the user's language. They can be edited from the UI to run an A/B.
-INSTRUCTIONS_EN = (
+# The checkpoint is not an LLM: it does not "explain" and it does not reason. It chooses, and its
+# instructions were trained to be short and direct ("Which department should handle this?"), so
+# the default is short too. The long, constraint-heavy wording is kept as a preset: it is
+# off-distribution for the base checkpoints and reads as a reasoning request the model cannot do.
+INSTRUCTIONS_EN = "Which candidate solution best solves the problem described in the state?"
+INSTRUCTIONS_IT = "Quale soluzione candidata risolve meglio il problema descritto nello stato?"
+
+# The long, constraint-heavy wording (preset, off-distribution for the base checkpoints).
+INSTRUCTIONS_LONG_EN = (
     "Which candidate fully eliminates the problem under all stated constraints, including "
     "restarts, concurrency and late retries, and does not merely reduce its probability?"
 )
-INSTRUCTIONS_IT = (
-    "Quale soluzione candidata elimina del tutto il problema rispettando tutti i vincoli "
-    "indicati, compresi riavvii, concorrenza e ritentativi tardivi, invece di ridurne solo la "
-    "probabilita'?"
-)
 
-# The previous default, kept as a preset so the wording change can be measured instead of felt.
+# The first wording, kept as a preset so a change can be measured instead of felt.
 INSTRUCTIONS_LEGACY_EN = (
     "Which candidate solution best solves the problem described in the state? "
     "Pick the single most effective and practically applicable one."
@@ -82,24 +82,23 @@ INSTRUCTIONS_LEGACY_EN = (
 # Instruction variants the UI shows in its preset menu. Labels are Italian (what the user reads);
 # the instruction text stays English (the model's training language), editable in the textarea.
 INSTRUCTION_PRESETS = [
-    {"id": "eliminates", "label": "Elimina il problema (default)", "text": INSTRUCTIONS_EN},
+    {"id": "best", "label": "Migliore (default, corta)", "text": INSTRUCTIONS_EN},
+    {"id": "eliminates", "label": "Elimina il problema (vincoli completi)", "text": INSTRUCTIONS_LONG_EN},
     {"id": "legacy", "label": "Versione precedente (efficace e applicabile)", "text": INSTRUCTIONS_LEGACY_EN},
     {
         "id": "correctness",
         "label": "Correttezza forte",
         "text": (
-            "Which candidate solution is most likely to be fully correct under every stated "
-            "constraint? Favour correctness over speed, cost or simplicity, and ignore how easy "
-            "each option is to implement."
+            "Which candidate solution is most likely to be fully correct? Favour correctness "
+            "over speed, cost or simplicity."
         ),
     },
     {
         "id": "low_risk",
         "label": "Minimo rischio",
         "text": (
-            "Which candidate solution carries the lowest risk of making things worse or failing "
-            "under load, partial rollbacks and unexpected inputs? Prefer the option with the "
-            "smallest blast radius, even when its upside is smaller."
+            "Which candidate solution carries the lowest risk of making things worse? Prefer the "
+            "option with the smallest blast radius, even when its upside is smaller."
         ),
     },
     {
@@ -107,8 +106,7 @@ INSTRUCTION_PRESETS = [
         "label": "Rapidita' di intervento",
         "text": (
             "Which candidate solution can be deployed and start helping the soonest, with the "
-            "least coordination and the fewest moving parts? Prefer the fastest effective "
-            "intervention over the most thorough one."
+            "fewest moving parts?"
         ),
     },
 ]
@@ -141,7 +139,25 @@ RELIABILITY_CONFIDENCE_LOW = 0.34
 RELIABILITY_GOOD_LEVELS = ("good", "optimal")
 RELIABILITY_WEAK_LEVELS = ("useless", "weak")
 
-STRATEGIES = ("auto", "simple", "tournament", "long")
+STRATEGIES = ("auto", "simple", "tournament", "long", "per_solution")
+
+# Checkpoints the playground can route to, and the aliases Laya accepts for them. Kept here so
+# `/v1/models` and the UI share one list; the playground does not register extra checkpoints.
+CHECKPOINTS: List[str] = ["english", "multilingual", "typed-decisions"]
+CHECKPOINT_ALIASES: Dict[str, str] = {
+    "en": "english", "laya": "english", "default": "english",
+    "multi": "multilingual", "ml": "multilingual", "laya-multilingual": "multilingual",
+    "typed": "typed-decisions", "typed_decisions": "typed-decisions", "decisions": "typed-decisions",
+}
+
+# The per-solution strategy asks one short yes/no choice per candidate instead of one holistic
+# choice over all of them: a judgment the base checkpoints handle better than "which is best".
+# Neutral keys ("A"/"B") on purpose, so the option labels cannot dominate the answer.
+PER_SOLUTION_INSTRUCTIONS = "Does this candidate solution fully eliminate the problem described in the state?"
+PER_SOLUTION_CRITERIA = {
+    "A": "yes, it fully eliminates the problem",
+    "B": "no, it does not",
+}
 
 
 def hf_token() -> Optional[str]:
@@ -509,6 +525,60 @@ def _truncation_note(problem: str, max_len: int, head_max_len: int) -> Optional[
     return None
 
 
+def _per_solution_questions(
+    solutions: List[str],
+    *,
+    instructions: Optional[str] = None,
+    with_quality: bool = False,
+    with_complete: bool = False,
+) -> Dict[str, Any]:
+    """One short yes/no `choice` per candidate, plus the optional type-2 questions.
+
+    Every question rides in the same forward pass. The candidate text goes in the instructions
+    (there is no per-question state), the criteria stay neutral ("A"/"B") so the labels cannot
+    dominate, and the answer is ranked by P("A") = P(the candidate eliminates the problem).
+    """
+    base = (instructions or PER_SOLUTION_INSTRUCTIONS).strip()
+    questions: Dict[str, Any] = {}
+    for i, text in enumerate(solutions):
+        questions[f"q{i:02d}"] = {
+            "type": "choice",
+            "instructions": f"{base} Candidate: {text}",
+            "criteria": dict(PER_SOLUTION_CRITERIA),
+        }
+    # Reuse the extra questions exactly as the single-choice path builds them.
+    extra = build_questions(solutions, with_quality=with_quality, with_complete=with_complete)
+    for qid in ("quality", "complete"):
+        if qid in extra:
+            questions[qid] = extra[qid]
+    return questions
+
+
+def _per_solution_view(
+    answers: Dict[str, Any], solutions: List[str]
+) -> Dict[str, Any]:
+    """Rank the candidates by P("A") from the per-solution answers, in the usual view shape."""
+    ranked = []
+    for i, text in enumerate(solutions):
+        answer = answers.get(f"q{i:02d}") or {}
+        probabilities = answer.get("probabilities") or {}
+        p_yes = float(probabilities.get("A", probabilities.get("yes", 0.0)))
+        ranked.append({"key": f"s{i:02d}", "text": text, "prob": p_yes})
+    ranked.sort(key=lambda item: item["prob"], reverse=True)
+    top = ranked[0] if ranked else None
+    return {
+        "choice": top["key"] if top else None,
+        "top": top,
+        "ranked": ranked,
+        "eliminated": [],
+        "confidence": None,
+        "answer_confidence": top["prob"] if top else None,
+        "low_confidence": None,
+        "abstention": None,
+        "abstention_threshold": None,
+    }
+
+
 def solve(
     *,
     problem: str,
@@ -539,11 +609,19 @@ def solve(
     if strategy not in STRATEGIES:
         raise ValueError(f"strategia sconosciuta: {requested_strategy!r}")
 
-    questions = build_questions(
-        solutions, instructions=instructions, with_quality=with_quality, with_complete=with_complete
-    )
-    criteria = questions["best"]["criteria"]
     n = len(solutions)
+    if strategy == "per_solution":
+        # One short yes/no question per candidate, answered in the same forward pass.
+        questions = _per_solution_questions(
+            solutions, instructions=instructions,
+            with_quality=with_quality, with_complete=with_complete,
+        )
+        criteria: Dict[str, str] = {}
+    else:
+        questions = build_questions(
+            solutions, instructions=instructions, with_quality=with_quality, with_complete=with_complete
+        )
+        criteria = questions["best"]["criteria"]
 
     budgets = suggest_budgets(n, checkpoint if checkpoint != "auto" else "multilingual")
     resolved_max_len = int(max_len) if max_len else budgets["max_len"]
@@ -581,8 +659,10 @@ def solve(
     latency_ms = (time.perf_counter() - started) * 1000.0
 
     answers = result.get("answers") or {}
-    best = answers.get("best") or {}
-    view = _answer_view(best, criteria)
+    if strategy == "per_solution":
+        view = _per_solution_view(answers, solutions)
+    else:
+        view = _answer_view(answers.get("best") or {}, criteria)
     routing = result.get("routing")
     facts = _agent_facts(router, routing)
 
@@ -612,6 +692,11 @@ def solve(
         notes.append(
             f"tournament inattivo (0 round): con {n} soluzioni e group_size {int(group_size)} "
             "equivale alla strategia Semplice"
+        )
+    if strategy == "per_solution":
+        notes.append(
+            f"giudizio per soluzione: {n} domande si'/no in una sola passata, classifica per "
+            "P(elimina il problema); le istruzioni impostate sono il prefisso di ogni domanda"
         )
 
     return {

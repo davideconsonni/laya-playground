@@ -199,7 +199,9 @@
         <button data-value="simple">Semplice</button>
         <button data-value="tournament">Tournament</button>
         <button data-value="long">Lungo</button>
+        <button data-value="per_solution">Per soluzione</button>
       </div>
+      <span class="hint"><b>Per soluzione</b>: una domanda si'/no per ogni candidata in una sola passata, classifica per P(elimina il problema). Piu' adatta a Laya base della scelta olistica (che sui giudizi di dominio e' vicina al caso).</span>
     </label>
 
     <div class="row">
@@ -366,15 +368,17 @@ function apiFetch(path, opts = {}) {
   return fetch(path, opts);
 }
 
-const INSTRUCTIONS_EN = "Which candidate fully eliminates the problem under all stated constraints, including restarts, concurrency and late retries, and does not merely reduce its probability?";
+const INSTRUCTIONS_EN = "Which candidate solution best solves the problem described in the state?";
+const INSTRUCTIONS_LONG_EN = "Which candidate fully eliminates the problem under all stated constraints, including restarts, concurrency and late retries, and does not merely reduce its probability?";
 const INSTRUCTIONS_LEGACY_EN = "Which candidate solution best solves the problem described in the state? Pick the single most effective and practically applicable one.";
 // Fallback finche' /api/status non fornisce i preset di engine.py (stessa lista, stesso ordine).
 let INSTRUCTION_PRESETS = [
-  { id: 'eliminates', label: 'Elimina il problema (default)', text: INSTRUCTIONS_EN },
+  { id: 'best', label: 'Migliore (default, corta)', text: INSTRUCTIONS_EN },
+  { id: 'eliminates', label: 'Elimina il problema (vincoli completi)', text: INSTRUCTIONS_LONG_EN },
   { id: 'legacy', label: 'Versione precedente (efficace e applicabile)', text: INSTRUCTIONS_LEGACY_EN },
-  { id: 'correctness', label: 'Correttezza forte', text: 'Which candidate solution is most likely to be fully correct under every stated constraint? Favour correctness over speed, cost or simplicity, and ignore how easy each option is to implement.' },
-  { id: 'low_risk', label: 'Minimo rischio', text: 'Which candidate solution carries the lowest risk of making things worse or failing under load, partial rollbacks and unexpected inputs? Prefer the option with the smallest blast radius, even when its upside is smaller.' },
-  { id: 'fast', label: 'Rapidita\' di intervento', text: 'Which candidate solution can be deployed and start helping the soonest, with the least coordination and the fewest moving parts? Prefer the fastest effective intervention over the most thorough one.' },
+  { id: 'correctness', label: 'Correttezza forte', text: 'Which candidate solution is most likely to be fully correct? Favour correctness over speed, cost or simplicity.' },
+  { id: 'low_risk', label: 'Minimo rischio', text: 'Which candidate solution carries the lowest risk of making things worse? Prefer the option with the smallest blast radius, even when its upside is smaller.' },
+  { id: 'fast', label: 'Rapidita\' di intervento', text: 'Which candidate solution can be deployed and start helping the soonest, with the fewest moving parts?' },
 ];
 const SUGGESTED_MIN_CONFIDENCE = 0.5;
 

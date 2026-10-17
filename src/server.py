@@ -7,6 +7,7 @@ Serves the UI (``src/static/index.html``) and these endpoints:
 * ``POST /api/stability`` -- the same decision under k rotations of the option order;
 * ``POST /api/assess``    -- heuristic reliability flag from a solve + stability payload;
 * ``POST /api/warmup``    -- starts the download/load of the checkpoints in the background.
+* ``GET  /v1/models``     -- OpenAI-style model list (informational; the playground speaks /api/*).
 
 Startup:  ``uv run python src/server.py``  (or one of the launchers: ``run.sh``, ``run.bat``,
 ``run.ps1``)
@@ -42,9 +43,10 @@ async def require_api_key(request: Request, call_next):
     """If `LAYA_API_KEY` is set, everything under /api/* requires it.
 
     Needed when the playground is exposed on the internet: without it, anyone can burn your
-    CPU/GPU. `/` (the UI) and `/health` stay open: the first is just a static page, the second
-    is polled by hosting platforms. It accepts `X-Api-Key`, `Authorization: Bearer` or `?key=`,
-    the latter so the UI can pick the key up from the URL the first time.
+    CPU/GPU. `/` (the UI), `/health` and `/v1/models` stay open: the first is a static page, the
+    second is polled by hosting platforms, and the third is a discovery endpoint for clients that
+    probe it. It accepts `X-Api-Key`, `Authorization: Bearer` or `?key=`, the latter so the UI can
+    pick the key up from the URL the first time.
     """
     key = api_key()
     if not key or not request.url.path.startswith("/api/"):
@@ -122,6 +124,26 @@ def api_status() -> Dict[str, Any]:
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/models")
+def v1_models() -> Dict[str, Any]:
+    """OpenAI-style model list, so a client that probes `/v1/models` gets an answer, not a 404.
+
+    Informational only: this playground speaks `/api/*`, not the OpenAI or `/v1/systemone`
+    protocols. It lists the checkpoints the router can be asked for (`/api/solve`'s `checkpoint`),
+    with their aliases. Open like `/health`, so a discovery probe needs no API key.
+    """
+    data = []
+    for name in engine.CHECKPOINTS:
+        data.append({
+            "id": name,
+            "object": "model",
+            "created": 0,
+            "owned_by": "convaiinnovations",
+            "aliases": sorted(a for a, target in engine.CHECKPOINT_ALIASES.items() if target == name),
+        })
+    return {"object": "list", "data": data}
 
 
 def _validate(problem: str, solutions: List[str]) -> None:

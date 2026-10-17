@@ -106,6 +106,7 @@ options (capped), and the UI mirrors the same heuristic when "automatic budget" 
 | `simple` | One `choice` question with all the options. | `auto` with <= 20 solutions, or forced. |
 | `tournament` | Group elimination (`group_size`, default 16), ~256 solutions max. | `auto` with > 20 solutions, or forced. |
 | `long` | Reads a problem longer than the window in windows instead of truncating. `predict_long` takes neither the budgets nor `min_confidence`. | Forced only. |
+| `per_solution` | One short yes/no `choice` per candidate (neutral keys `A`/`B`), all in one forward pass; ranked by P(`A`) = P(the candidate eliminates the problem). | Forced only. |
 | `stability` | Not a strategy: a separate endpoint that permutes `option_order` at random (seeded, see below). | When the UI checkbox is on. |
 
 `solve()` also emits human-readable **notes** (approximate truncation warning, window count,
@@ -156,6 +157,7 @@ back to `POST /api/assess` (stateless, like the rest), which runs this function 
 |---|---|
 | `GET /api/status` | Environment + pool state + `auth_required`. Open unless a key is set (it is under `/api/`, so it **does** require the key if `LAYA_API_KEY` is set). |
 | `GET /health` | Always open; used by the container `HEALTHCHECK` and by hosting platforms. |
+| `GET /v1/models` | Always open; OpenAI-style model list so a discovery probe gets an answer, not a 404. Informational: the app speaks `/api/*`. |
 | `POST /api/solve` | Validates, then one call to `engine.solve` per target device. `device: "both"` returns both results plus a per-device `errors` map. |
 | `POST /api/stability` | One call to `engine.stability`. |
 | `POST /api/assess` | `engine.reliability` per device, from a solve payload + an optional stability one. Pure Python, no model. |
@@ -236,3 +238,7 @@ environment):
   the `errors` map.
 - **Unhandled exception** -> a global handler returns `{detail: "<Type>: <message>"}` as JSON.
 - **Exposed without a key** -> the server logs a clear warning at startup.
+- **Base checkpoints are near chance on domain judgments** (Laya's own `typed-decisions`
+  benchmark: 0.362 English / 0.342 multilingual zero-shot, against 0.318 random). The UI says so,
+  the benchmark measures it on your own cases, and `per_solution` asks the short typed questions
+  the checkpoints handle better than one holistic "which is best?" choice.
